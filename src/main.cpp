@@ -11,6 +11,7 @@
 #include "closedloop.h"
 #include "iac.h"
 #include "knock.h"
+#include "dash.h"
 #include "diagnostics.h"
 #include "comms.h"
 #include "storage.h"
@@ -26,6 +27,7 @@ static uint32_t t_cl        = 0;   // 100 ms (10 Hz)
 static uint32_t t_iac       = 0;   // 100 ms (10 Hz)
 static uint32_t t_diag      = 0;   // 200 ms (5 Hz)
 static uint32_t t_comms     = 0;   // 5 ms   (200 Hz)
+static uint32_t t_dash      = 0;   // 100 ms (10 Hz)
 static uint32_t t_uptime    = 0;   // 1000 ms
 
 // ---- Engine State Machine -----------------------------------
@@ -301,7 +303,7 @@ void setup() {
     sched_init();
     diag_init(g_state.diag);
     iac_init(g_state.iac);
-    knock_init();            // Starts 25 kHz IntervalTimer
+    dash_init();
 
     digitalWriteFast(PIN_FUEL_PUMP_RELAY, HIGH);
 
@@ -330,8 +332,9 @@ void loop() {
 
         corrections_accel_update(g_state, (float)g_state.sensors.tps_pct, now, g_cfg);
 
-        // Knock: sample new peak and apply/recover retard
-        knock_update(g_state.ign, g_state.diag, now);
+        // Knock: sample envelope, gate to crank window, apply/recover retard
+        knock_update(g_state.ign, g_state.diag,
+                     crank_angle720_now_x10(g_state.crank), now);
         knock_recover(g_state.ign, g_state.diag, now);
 
         // Capture knock peak for comms monitor
@@ -388,6 +391,12 @@ void loop() {
             iac_apply_idle_compensation(g_state.iac, g_state.ac_active,
                                         g_state.sensors.ps_pressure, in_drive);
         }
+    }
+
+    // ---- 100 ms: Digital dash ------------------------------
+    if ((now - t_dash) >= DASH_UPDATE_MS) {
+        t_dash = now;
+        dash_update(g_state, g_cfg);
     }
 
     // ---- 200 ms: Diagnostics --------------------------------

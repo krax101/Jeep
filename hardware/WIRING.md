@@ -96,17 +96,20 @@ Teensy 3.3V ──[2.2kΩ]──┬── Teensy A2 (PIN_CLT) ──[100nF to GN
 Teensy 3.3V ──[2.2kΩ]──┬── Teensy A3 (PIN_IAT) ──[100nF to GND]
                         └── IAT sensor terminal (other terminal to GND)
 
-MAP sensor:
-  Map (+5V) ─── Teensy 5V (VUSB pad) or external 5V reg
+MAP sensor (GM 1-bar, 5V supply, 0.48–4.5V output):
+  Map (+5V) ─── 5V reg output (LM2596S-5.0 or separate 5V supply)
   Map GND   ─── GND
-  Map Signal ──[22kΩ]──┬── Teensy A1 (PIN_MAP) ──[100nF to GND]
-                       [10kΩ to GND]
+  Map Signal ──[33kΩ]──┬── Teensy A1 (PIN_MAP) ──[100nF to GND]
+                       [68kΩ to GND]
+  Divider ratio = 68/(33+68) = 0.673.
+  At 0.48V: ADC 401.  At 4.5V: ADC 3759.  Max pin voltage = 3.23V (safe).
 
-TPS:
-  TPS +5V   ─── 5V supply
-  TPS GND   ─── GND
-  TPS Wiper ──[22kΩ]──┬── Teensy A0 (PIN_TPS)
-                      [10kΩ to GND]
+TPS (ratiometric potentiometer, 3.3V supply):
+  TPS +    ─── Teensy 3.3V rail  (NOT 5V — ratiometric on 3.3V)
+  TPS GND  ─── GND
+  TPS Wiper ─────────── Teensy A0 (PIN_TPS) ──[100nF to GND]
+  No voltage divider needed; wiper stays within 0–3.3V.
+  ADC_CLOSED ≈ 500 (~0.4V), ADC_OPEN ≈ 3876 (~3.1V).
 
 O2 Sensor (narrowband 0–1V output):
   O2 signal ──────────── Teensy A4 (PIN_O2)   [no divider needed, 0–1V safe]
@@ -116,6 +119,29 @@ O2 Sensor (narrowband 0–1V output):
 Battery voltage:
   +12V rail ──[56kΩ]──┬── Teensy A5 (PIN_BATT)
                       [10kΩ to GND]
+
+Knock sensor (hardware envelope detector — no ISR needed):
+  Knock sensor signal ──[100nF]──┬── BAT46 Schottky (anode)
+                                 └── (AC coupling cap)
+  BAT46 cathode ─────────────────┬── Teensy A6 (PIN_KNOCK)
+                                 ├── [10kΩ to GND]   ← RC discharge
+                                 └── [470nF to GND]  ← RC envelope, τ=4.7ms
+  No DC bias resistors needed. Envelope output rests at 0V; peaks to ~1.5V on knock.
+  Sampled at 50 Hz from main sensor loop.
+```
+
+## High-Side 12V Digital Inputs
+All switched 12V inputs (IGN_SW, START_SIGNAL, PARK_NEUTRAL, AC_REQUEST) use
+a 100kΩ + 22kΩ resistor divider to bring 12V logic down to Teensy 3.3V I/O:
+```
+12V input ──[100kΩ]──┬── Teensy digital pin
+                     [22kΩ to GND]
+  Ratio = 22/122 = 0.180.  At 12V: 2.16V → HIGH.  At 0V: 0V → LOW.
+```
+Power steering pressure switch (PIN_PS_PRESSURE, pin 38):
+```
+  PS switch ──[1kΩ]── Teensy pin 38
+  Teensy pin 38 ──[10kΩ to 3.3V] (active-low: LOW = high PS load)
 ```
 
 ## Auxiliary Outputs
@@ -176,7 +202,7 @@ with no firmware assignment required. "N/C" = confirmed unused per Chrysler FSM.
 | C12 | Diagnostic TX | REPLACED — USB Serial | USB at 115200 baud is a superset of factory K-line |
 | C13 | Factory unused | N/C | Confirmed unused in FSM |
 | C14 | MAP sensor +5V | HARDWARE — 5V reg output | Sensor supply; no GPIO |
-| C15 | TPS +5V | HARDWARE — 5V reg output | Same supply rail as MAP |
+| C15 | TPS +5V | REPLACED — Teensy 3.3V rail | TPS is ratiometric; 3.3V supply = no divider needed |
 | C16 | Cam sensor + | HARDWARE — MAX9926 IN+ (2nd) | OUT → PIN_CAM_IN (3) |
 
 ### D-Side Connector (fuel injectors / ignition / O2 / misc)
@@ -189,7 +215,7 @@ with no firmware assignment required. "N/C" = confirmed unused per Chrysler FSM.
 | D5  | Inj 2 (Cyl 5) | FIRMWARE — PIN_INJ_2 (6) | MOSFET low-side driver |
 | D6  | Inj 3 (Cyl 3) | FIRMWARE — PIN_INJ_3 (7) | MOSFET low-side driver |
 | D7  | Inj 4 (Cyl 6) | FIRMWARE — PIN_INJ_4 (8) | MOSFET low-side driver |
-| D8  | Knock sensor | FIRMWARE — PIN_KNOCK (A6) | 25 kHz sampling; 1.65V bias required |
+| D8  | Knock sensor | FIRMWARE — PIN_KNOCK (A6) | Hardware envelope detector; see Knock section below |
 | D9  | O2 sensor | FIRMWARE — PIN_O2 (A4) | Narrowband, direct to ADC |
 | D10 | Injector +12V | HARDWARE — same +12V rail as C11 | Both pins land on same PCB trace |
 | D11 | Inj 5 (Cyl 2) | FIRMWARE — PIN_INJ_5 (9) | MOSFET low-side driver |
@@ -210,6 +236,27 @@ with no firmware assignment required. "N/C" = confirmed unused per Chrysler FSM.
 | 38 | PIN_PS_PRESSURE | Power steering pressure switch |
 | 39 | PIN_AC_CLUTCH | A/C compressor clutch relay output |
 | 40 | PIN_O2_HEATER | O2 sensor heater relay (delayed) |
+| 21 | PIN_DASH_RST | ILI9341 display reset |
+| 22 | PIN_DASH_CS  | ILI9341 chip-select |
+| 23 | PIN_DASH_DC  | ILI9341 data/command |
+| 42 | PIN_DASH_SCK | ILI9341 SPI2 clock (bottom pad) |
+| 43 | PIN_DASH_MOSI| ILI9341 SPI2 data  (bottom pad) |
+
+## Digital Dash Wiring (ILI9341 TFT, 320×240)
+```
+ILI9341 VCC  ─── Teensy 3.3V
+ILI9341 GND  ─── GND
+ILI9341 CS   ─── Teensy pin 22 (PIN_DASH_CS)
+ILI9341 RESET─── Teensy pin 21 (PIN_DASH_RST)
+ILI9341 DC   ─── Teensy pin 23 (PIN_DASH_DC)
+ILI9341 SDI  ─── Teensy pin 43 (SPI2 MOSI — solder to bottom pad)
+ILI9341 SCK  ─── Teensy pin 42 (SPI2 SCK  — solder to bottom pad)
+ILI9341 LED  ─── 3.3V through 10Ω resistor (backlight)
+ILI9341 SDO  ─── not connected (read-back not used)
+```
+> Pins 42/43 are on the underside SOIC-style pads of the Teensy 4.1.
+> Solder 30 AWG wire directly to the pads, or use a breakout daughter board.
+> The ILI9341_t3 library auto-selects SPI2 when MOSI=43, SCK=42 are passed.
 
 ---
 

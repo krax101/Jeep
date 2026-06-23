@@ -58,18 +58,16 @@
 #define IGN_MIN_ADVANCE_DEG       0
 
 // ---- Knock Detection ----------------------------------------
-// Renix 4.0L knock sensor: piezoelectric, block-mounted.
-// Center frequency ~6.7 kHz for this engine.
-// Hardware: 1.65V DC bias on ADC input (two 10kΩ from 3.3V rail).
-// Optional external RC bandpass 5–9 kHz improves noise immunity.
-#define KNOCK_SAMPLE_RATE_HZ      25000    // 25 kHz ADC sampling
-#define KNOCK_ADC_BIAS            2048     // Expected midpoint (12-bit at 1.65V)
-#define KNOCK_THRESHOLD_RATIO     2.5f     // Peak must be 2.5× noise floor
-#define KNOCK_WINDOW_ATDC_DEG     60       // Evaluate 0–60° ATDC only
+// Renix 4.0L knock sensor: piezoelectric, block-mounted (~6.7 kHz).
+// Hardware envelope detector on board (no 25 kHz ISR):
+//   Knock signal → 100nF AC coupling cap → BAT46 Schottky diode (cathode to ADC)
+//   10kΩ + 470nF RC to GND at ADC pin (envelope follower, τ=4.7 ms, fc=33 Hz)
+// Envelope sampled at 50 Hz in main sensor loop (no IntervalTimer needed).
+// Active detection window: 10–60° ATDC per cylinder (6-cyl: every 120°).
+#define KNOCK_THRESHOLD_RATIO     2.5f     // Envelope must be 2.5× noise floor
 #define KNOCK_RETARD_STEP_DEG     2.0f     // Degrees retarded per knock event
 #define KNOCK_RETARD_MAX_DEG      10.0f    // Maximum retard ceiling
 #define KNOCK_RECOVER_DEG_S       2.0f     // Recovery rate (deg/sec toward 0)
-#define KNOCK_CONFIRM_SAMPLES     3        // Consecutive above-threshold samples to confirm
 
 // ---- Rev Limiter -------------------------------------------
 #define REV_LIMIT_HARD_RPM        5600
@@ -140,16 +138,19 @@
 #define THERM_B                   4039.0f
 #define THERM_PULLUP_OHMS         2200.0f  // 2.2kΩ pullup to 3.3V
 
-// TPS: potentiometer, ~0.5V @ idle, ~4.5V @ WOT (5V supply → divider to 3.3V ADC)
-// Voltage divider on TPS signal: 22k/(22k+10k) ≈ 0.688 → max 4.5*0.688=3.1V safe
-#define TPS_ADC_CLOSED            500     // ~0.5V × 0.688 / 3.3 × 4096
-#define TPS_ADC_OPEN              3876    // ~4.5V × 0.688 / 3.3 × 4096
+// TPS: potentiometer powered directly from Teensy 3.3V rail (no voltage divider).
+// Bosch 0 280 130 026 or equivalent; wiper connects directly to ADC pin.
+// Ratiometric on 3.3V: ~0.4V @ closed throttle, ~3.1V @ WOT.
+// ADC values below are TYPICAL; calibrate at first start via serial tuning.
+#define TPS_ADC_CLOSED            500     // ~0.4V on 3.3V supply
+#define TPS_ADC_OPEN              3876    // ~3.1V on 3.3V supply
 
-// MAP: GM 1-bar MAP sensor (e.g., ACDelco 213-796), 0-5V output
-// Voltage divider: 22k/(22k+10k) same as TPS divider
-// 0.5V @ 0 kPa → ADC ≈ 620;  4.65V @ 104 kPa → ADC ≈ 3763
-#define MAP_ADC_0KPA              620
-#define MAP_ADC_104KPA            3763
+// MAP: GM 1-bar MAP sensor (e.g., ACDelco 213-796), 5V supply.
+// Voltage divider: 33kΩ series (signal side) + 68kΩ to GND.
+// Ratio = 68/(33+68) = 0.673.  At 0.48V: ADC 401.  At 4.5V: ADC 3759.
+// The 33kΩ + 68kΩ divider keeps max ADC voltage < 3.23V (sensor @4.8V max → 3.23V, safe).
+#define MAP_ADC_0KPA              401     // 0.48V × 0.673 / 3.3 × 4095
+#define MAP_ADC_104KPA            3763    // 4.5V × 0.673 / 3.3 × 4095 ≈ 3759
 #define MAP_MIN_KPA               10.0f
 #define MAP_MAX_KPA               110.0f
 
@@ -157,9 +158,15 @@
 // 0 mV (lean) → ADC 0;   1000 mV (rich) → ADC 1241
 #define O2_MV_PER_ADC_COUNT       (3300.0f / ADC_MAX)
 
-// Knock sensor: piezo AC signal, 1.65V DC bias applied in hardware.
-// 0–3.3V after bias; midpoint = 2048 (12-bit ADC at 1.65V)
-#define KNOCK_MV_PER_ADC_COUNT    O2_MV_PER_ADC_COUNT
+// Knock sensor: piezoelectric, block-mounted, ~6.7 kHz center frequency.
+// Hardware envelope detector required on board (see BOM and WIRING):
+//   Sensor → 100nF coupling cap → BAT46 Schottky → ADC pin
+//   10kΩ + 470nF RC to GND at ADC pin (envelope follower, τ = 4.7 ms)
+// No DC bias needed; envelope output is 0–3.3V (peak of rectified signal).
+// ADC reads the slowly-varying envelope at 50 Hz from the main sensor loop.
+// No IntervalTimer or ISR required.
+#define KNOCK_ENVELOPE_ALPHA      0.6f   // EMA weight for envelope peak
+#define KNOCK_NOISE_ALPHA         0.002f // Slow IIR for noise floor adaptation
 
 // Battery voltage: 56kΩ + 10kΩ divider → ratio 10/66 = 0.1515
 // At 16V: 2.42V → ADC 3005;  At 12V: 1.82V → ADC 2254
@@ -200,14 +207,14 @@
                                        // AT models: leave unconnected per Renix spec
 
 // ---- Analog Inputs (A0–A7 = pins 14–21) --------------------
-#define PIN_TPS                   A0   // C7:  Throttle position sensor
-#define PIN_MAP                   A1   // C6:  MAP sensor signal
-#define PIN_CLT                   A2   // C10: Coolant temp sensor
-#define PIN_IAT                   A3   // C8:  Intake air temp sensor
-#define PIN_O2                    A4   // D9:  O2 sensor signal (narrowband)
+#define PIN_TPS                   A0   // C7:  Throttle position sensor (3.3V supply, no divider)
+#define PIN_MAP                   A1   // C6:  MAP sensor signal (5V sensor, 33k+68k divider)
+#define PIN_CLT                   A2   // C10: Coolant temp sensor (2.2kΩ pullup to 3.3V)
+#define PIN_IAT                   A3   // C8:  Intake air temp sensor (2.2kΩ pullup to 3.3V)
+#define PIN_O2                    A4   // D9:  O2 sensor signal (narrowband, direct to ADC)
 #define PIN_BATT                  A5   // Battery voltage sense (56k+10k divider)
-#define PIN_KNOCK                 A6   // D8:  Knock sensor (1.65V bias required)
-                                       // A7 = pin 21 reserved for future use
+#define PIN_KNOCK                 A6   // D8:  Knock envelope (BAT46 + 10k/470nF, see BOM)
+#define PIN_DASH_RST              21   // Display RST (Teensy 4.1 A7 pad)
 
 // ---- IAC Stepper Motor (4-wire full-step) -------------------
 #define PIN_IAC_A_POS             24
@@ -240,6 +247,19 @@
 #define PIN_O2_HEATER             40   // O2 sensor heater relay (delayed enable)
 #define PIN_LATCH_RELAY           41   // A9: ECU self-hold relay (post key-off shutdown)
 
+// ---- Digital Dash (ILI9341 TFT via SPI2 — bottom edge pads) ------
+// Teensy 4.1 SPI2 hardware pins are on the bottom SOIC-style pads.
+// Solder fine-gauge wire to the underside pads or use a breakout board.
+// The ILI9341_t3 library (included in Teensyduino) auto-detects SPI2
+// when MOSI=43 and SCK=42 are passed to the constructor.
+#define PIN_DASH_CS               22   // Display chip-select (A8 pad, free)
+#define PIN_DASH_DC               23   // Display data/command (A9 pad, free)
+// PIN_DASH_RST = 21 (defined above in analog section as A7)
+#define PIN_DASH_MOSI             43   // SPI2 MOSI (bottom pad)
+#define PIN_DASH_SCK              42   // SPI2 SCK  (bottom pad)
+
+#define DASH_UPDATE_MS            100  // Refresh rate for display (10 Hz)
+
 // ============================================================
 // HARDWARE-ONLY PINS — NO FIRMWARE GPIO ASSIGNMENT NEEDED
 // ============================================================
@@ -255,7 +275,8 @@
 //                              superseded by the USB monitor + fault codes.
 //  C13 (Factory "not used"):  Leave N/C — confirmed unused in factory FSM
 //  C14 (MAP sensor +5V):      LM7805 5V output — hardware supply, no GPIO
-//  C15 (TPS +5V):             LM7805 5V output — hardware supply, no GPIO
+//  C15 (TPS +5V):             REPLACED — TPS is now powered from Teensy 3.3V
+//                              for direct ADC compatibility (no divider needed)
 //  D2  (GND/Diagnostic GND):  PCB GND
 //  D3  (Sensor ground):       PCB GND (separate pour from power GND)
 //  D10 (Injector +12V feed):  Same rail as C11 — both land on same PCB trace

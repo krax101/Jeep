@@ -53,18 +53,40 @@
 | Qty | Part | Description | Notes |
 |-----|------|-------------|-------|
 | 2 | 2.2kΩ resistor (1/4 W) | CLT and IAT thermistor pullups to 3.3V | |
-| 2 | 22kΩ resistor | Upper half of MAP/TPS voltage divider | Scales 0–5V sensor output to 0–3.3V |
-| 2 | 10kΩ resistor | Lower half of MAP/TPS divider | |
+| 1 | 33kΩ resistor (1/4 W) | Series resistor — MAP signal to ADC | With 68kΩ gives ratio 0.673; scales 5V MAP to 3.3V |
+| 1 | 68kΩ resistor (1/4 W) | Shunt to GND — MAP voltage divider | |
 | 1 | 56kΩ resistor | Upper half of battery voltage divider | |
 | 1 | 10kΩ resistor | Lower half of battery voltage divider | |
 | 5 | 100nF ceramic | ADC input bypass/filter caps | One per analog input (TPS/MAP/CLT/IAT/KNOCK) |
 
-## Knock Sensor Interface
+> **TPS note:** TPS is powered from Teensy 3.3V — wiper connects directly to ADC pin A0. No voltage divider required.
+
+## High-Side 12V Digital Input Dividers
 | Qty | Part | Description | Notes |
 |-----|------|-------------|-------|
-| 2 | 10kΩ resistor (1/4 W) | DC bias voltage divider for knock ADC input | 3.3V → 10kΩ → node → 10kΩ → GND; node = 1.65V midpoint |
-| 1 | 10nF ceramic capacitor | AC coupling cap (knock signal to bias node) | Blocks DC; passes knock AC frequencies |
+| 4 | 100kΩ resistor (1/4 W) | Top half — 12V input dividers | One each for IGN_SW, START, P/N, A/C request |
+| 4 | 22kΩ resistor (1/4 W) | Bottom half — 12V input dividers | Ratio 22/122=0.180; 12V → 2.16V (safe HIGH) |
+| 1 | 10kΩ resistor | Pull-up for PS pressure switch (active-low) | 3.3V pull-up; switch closes to GND |
+| 1 | 1kΩ resistor | Series for PS pressure switch | Current-limit |
+
+## Knock Sensor Interface (hardware envelope detector)
+| Qty | Part | Description | Notes |
+|-----|------|-------------|-------|
+| 1 | BAT46 Schottky diode (SOD-80 or DO-35) | Half-wave rectifier for knock envelope | Low forward voltage (~0.3V); fast recovery |
+| 1 | 100nF ceramic capacitor | AC coupling cap — knock signal to BAT46 anode | Blocks DC; passes ~6.7 kHz knock AC |
+| 1 | 10kΩ resistor (1/4 W) | RC discharge resistor at ADC pin | With 470nF: τ=4.7ms, fc=33Hz |
+| 1 | 470nF ceramic/film capacitor | RC envelope hold capacitor | |
 | 1 | Stock Renix knock sensor | Piezoelectric, block-mounted, M8 thread | ~6.7 kHz center; part # varies by year |
+
+## Digital Dashboard
+| Qty | Part | Description | Notes |
+|-----|------|-------------|-------|
+| 1 | ILI9341 TFT LCD module (2.4" or 2.8") | 320×240 colour display, SPI interface | Many clones available; 3.3V logic, 5V tolerant backlight |
+| 1 | 10Ω resistor | Backlight LED current limiter | |
+| 2 | 30 AWG wire (~2 cm) | Solder tails to Teensy bottom-pad SPI2 pins (42, 43) | Or use a Teensy 4.1 breakout board |
+
+> Library: **ILI9341_t3** is included in Teensyduino — no separate install.
+> Display shows RPM bar, CLT/MAP/VSS/BATT gauges, fuel mode, STFT/LTFT, knock retard, and fault codes at 10 Hz.
 
 ## Connectors / Wiring Terminals
 | Qty | Part | Description |
@@ -99,6 +121,8 @@
 | MAX9926 conditioner | $8 |
 | L298N IAC driver | $5 |
 | Power supply components | $10 |
-| Knock sensor bias network | $1 |
+| Knock envelope detector (BAT46 + RC) | $2 |
+| High-side input divider resistors | $1 |
+| ILI9341 2.4" TFT display | $8 |
 | Connectors / enclosure | $20 |
-| **Total** | **~$89** |
+| **Total** | **~$99** |

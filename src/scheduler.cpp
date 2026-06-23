@@ -152,10 +152,12 @@ void sched_fire_inj_close(uint8_t ch) {
 
 void sched_fire_ign_dwell(uint8_t ch) {
     (void)ch;
-    digitalWriteFast(PIN_IGN_COIL, HIGH);  // Begin coil charge
+    digitalWriteFast(PIN_IGN_COIL, HIGH);
+    digitalWriteFast(PIN_TACH_OUT, HIGH);  // Tach pulse HIGH at dwell start
 }
 
 void sched_fire_ign_spark(uint8_t ch) {
     (void)ch;
     digitalWriteFast(PIN_IGN_COIL, LOW);   // Drop coil → spark
+    digitalWriteFast(PIN_TACH_OUT, LOW);   // Tach pulse LOW at fire = one pulse per cylinder
 }
