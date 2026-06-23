@@ -57,7 +57,14 @@
 | 2 | 10kΩ resistor | Lower half of MAP/TPS divider | |
 | 1 | 56kΩ resistor | Upper half of battery voltage divider | |
 | 1 | 10kΩ resistor | Lower half of battery voltage divider | |
-| 4 | 100nF ceramic | ADC input bypass/filter caps | One per analog input |
+| 5 | 100nF ceramic | ADC input bypass/filter caps | One per analog input (TPS/MAP/CLT/IAT/KNOCK) |
+
+## Knock Sensor Interface
+| Qty | Part | Description | Notes |
+|-----|------|-------------|-------|
+| 2 | 10kΩ resistor (1/4 W) | DC bias voltage divider for knock ADC input | 3.3V → 10kΩ → node → 10kΩ → GND; node = 1.65V midpoint |
+| 1 | 10nF ceramic capacitor | AC coupling cap (knock signal to bias node) | Blocks DC; passes knock AC frequencies |
+| 1 | Stock Renix knock sensor | Piezoelectric, block-mounted, M8 thread | ~6.7 kHz center; part # varies by year |
 
 ## Connectors / Wiring Terminals
 | Qty | Part | Description |
@@ -92,5 +99,6 @@
 | MAX9926 conditioner | $8 |
 | L298N IAC driver | $5 |
 | Power supply components | $10 |
+| Knock sensor bias network | $1 |
 | Connectors / enclosure | $20 |
-| **Total** | **~$90** |
+| **Total** | **~$89** |

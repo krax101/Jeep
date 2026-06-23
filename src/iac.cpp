@@ -84,6 +84,16 @@ void iac_set_target(IACState& iac, int16_t position) {
 }
 
 void iac_park(IACState& iac) {
-    // Move to parked position (about 15% open for reliable restart)
+    // Move to parked position (~15% open for reliable restart)
     iac_set_target(iac, 30);
+}
+
+void iac_apply_idle_compensation(IACState& iac, bool ac_on,
+                                 bool ps_load, bool in_drive) {
+    int16_t bump = 0;
+    if (ac_on)    bump += IDLE_AC_BUMP_STEPS;
+    if (ps_load)  bump += IDLE_PS_BUMP_STEPS;
+    if (in_drive) bump += IDLE_DRIVE_BUMP_STEPS;
+    // Add bump on top of whatever the P-controller already targeted
+    iac_set_target(iac, iac.target + bump);
 }

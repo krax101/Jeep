@@ -19,3 +19,10 @@ float ema_filter(float old_val, float new_val, float alpha);
 
 // Check sensor plausibility; set fault flags in SensorData.
 void sensors_check_faults(SensorData& s);
+
+// Read discrete (digital) inputs: IGN_SW, START_SIGNAL, PARK_NEUTRAL,
+// AC_REQUEST, PS_PRESSURE.  Call alongside sensors_update().
+void sensors_read_discrete(SensorData& s);
+
+// VSS interrupt handler — attach to PIN_VSS_IN rising edge in setup().
+void sensors_vss_isr();

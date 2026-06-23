@@ -15,11 +15,15 @@ static const uint16_t CYL_TDC_720_X10[ENGINE_CYLINDERS] = {
 // Firing order index → cylinder channel mapping
 static const uint8_t FIRING_ORDER[ENGINE_CYLINDERS] = {0, 4, 2, 5, 1, 3};
 
-uint8_t ign_calc_advance(const SensorData& s, const ECUConfig& cfg) {
+uint8_t ign_calc_advance(const SensorData& s, const ECUConfig& cfg,
+                         uint8_t knock_retard) {
     float adv = table3d_lookup(cfg.ign_table, s.rpm, s.map_kpa);
     if (adv < (float)IGN_MIN_ADVANCE_DEG) adv = IGN_MIN_ADVANCE_DEG;
     if (adv > (float)IGN_MAX_ADVANCE_DEG) adv = IGN_MAX_ADVANCE_DEG;
-    return (uint8_t)adv;
+    // Subtract knock retard; floor at minimum safe advance
+    float retarded = adv - (float)knock_retard;
+    if (retarded < (float)IGN_MIN_ADVANCE_DEG) retarded = IGN_MIN_ADVANCE_DEG;
+    return (uint8_t)retarded;
 }
 
 uint16_t ign_calc_dwell(uint16_t rpm, const ECUConfig& cfg) {

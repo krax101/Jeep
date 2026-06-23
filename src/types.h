@@ -34,6 +34,12 @@ struct SensorData {
     uint16_t o2_mv;         // O2 sensor millivolts
     uint16_t batt_mv;       // Battery voltage millivolts
     uint8_t  vss_kph;       // Vehicle speed km/h
+    uint16_t knock_mv;      // Knock sensor AC amplitude (peak since last read, mV)
+    bool     ign_sw;        // Ignition switch state (key-on)
+    bool     start_signal;  // Starter engagement (HIGH = cranking)
+    bool     park_neutral;  // P/N switch: true = P or N position
+    bool     ac_request;    // A/C thermostat/switch requesting compressor
+    bool     ps_pressure;   // Power steering pressure switch (HIGH = load)
     bool     clt_fault;
     bool     iat_fault;
     bool     tps_fault;
@@ -53,7 +59,8 @@ struct FuelState {
 
 // ---- Ignition Output ----------------------------------------
 struct IgnState {
-    uint8_t  advance_deg;   // Current ignition advance °BTDC
+    uint8_t  advance_deg;   // Current ignition advance °BTDC (before knock retard)
+    uint8_t  knock_retard;  // Active knock retard (subtracted from advance_deg)
     uint16_t dwell_us;      // Coil charge time microseconds
 };
 
@@ -113,11 +120,12 @@ enum class FaultCode : uint8_t {
     O2_INACTIVE    = 9,
     CPS_LOSS       = 10,
     CAM_LOSS       = 11,
-    INJ_OC         = 12,  // Injector open-circuit (future)
-    KNOCK          = 13,  // Knock detected (future)
+    INJ_OC         = 12,
+    KNOCK          = 13,
     BATT_HIGH      = 14,
     BATT_LOW       = 15,
-    MAX_CODES      = 16
+    O2_HEATER_FAULT= 16,
+    MAX_CODES      = 17
 };
 
 struct DiagState {
@@ -190,6 +198,9 @@ struct ECUConfig {
     float    ae_tps_threshold;
     float    ae_multiplier;
 
+    // Persistent closed-loop trim (restored on boot)
+    float    saved_ltft;
+
     uint16_t checksum;
 };
 
@@ -213,4 +224,13 @@ struct ECUState {
     uint32_t    tps_last_ms;
 
     uint8_t     ase_events_left; // After-start enrichment event count
+
+    // Auxiliary output states
+    bool        ac_active;       // A/C compressor clutch commanded on
+    bool        o2_heater_on;    // O2 heater relay active
+    bool        latch_relay_on;  // ECU self-hold relay active
+
+    // Timing references
+    uint32_t    run_start_ms;    // millis() when engine entered RUNNING state
+    uint32_t    key_off_ms;      // millis() when ignition switch went LOW
 };

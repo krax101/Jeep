@@ -3,6 +3,10 @@
 // ============================================================
 // Renix Jeep 4.0L I6 Standalone ECU — Board Configuration
 // Target: Teensy 4.1 (ARM Cortex-M7 @ 600 MHz)
+//
+// HARNESS AUDIT: Every Renix ECU connector pin is accounted for
+// below, either as a firmware GPIO or as a justified hardware-only
+// connection. See hardware/WIRING.md for the full audit table.
 // ============================================================
 
 // ---- Engine -------------------------------------------------
@@ -53,6 +57,20 @@
 #define IGN_MAX_ADVANCE_DEG       45
 #define IGN_MIN_ADVANCE_DEG       0
 
+// ---- Knock Detection ----------------------------------------
+// Renix 4.0L knock sensor: piezoelectric, block-mounted.
+// Center frequency ~6.7 kHz for this engine.
+// Hardware: 1.65V DC bias on ADC input (two 10kΩ from 3.3V rail).
+// Optional external RC bandpass 5–9 kHz improves noise immunity.
+#define KNOCK_SAMPLE_RATE_HZ      25000    // 25 kHz ADC sampling
+#define KNOCK_ADC_BIAS            2048     // Expected midpoint (12-bit at 1.65V)
+#define KNOCK_THRESHOLD_RATIO     2.5f     // Peak must be 2.5× noise floor
+#define KNOCK_WINDOW_ATDC_DEG     60       // Evaluate 0–60° ATDC only
+#define KNOCK_RETARD_STEP_DEG     2.0f     // Degrees retarded per knock event
+#define KNOCK_RETARD_MAX_DEG      10.0f    // Maximum retard ceiling
+#define KNOCK_RECOVER_DEG_S       2.0f     // Recovery rate (deg/sec toward 0)
+#define KNOCK_CONFIRM_SAMPLES     3        // Consecutive above-threshold samples to confirm
+
 // ---- Rev Limiter -------------------------------------------
 #define REV_LIMIT_HARD_RPM        5600
 #define REV_LIMIT_SOFT_RPM        5400    // Begin fuel cut
@@ -63,6 +81,37 @@
 #define IDLE_TARGET_RPM_WARM      720
 #define IDLE_PROPORTIONAL_GAIN    0.5f
 #define IDLE_INTEGRAL_GAIN        0.05f
+
+// Idle step compensation bumps (IAC steps added on top of base target)
+#define IDLE_AC_BUMP_STEPS        20      // A/C compressor clutch load
+#define IDLE_PS_BUMP_STEPS        12      // Power steering pump load
+#define IDLE_DRIVE_BUMP_STEPS     15      // Torque converter drag (AT in Drive)
+
+// ---- A/C Compressor Control ---------------------------------
+// ECU controls the A/C clutch relay to prevent stall on engagement.
+// A 200ms delay between request and engagement allows IAC to pre-open.
+#define AC_ENGAGE_DELAY_MS        200
+// Disable A/C compressor above this TPS (WOT cutoff)
+#define AC_WOT_CUTOFF_TPS_PCT     85
+// Disable A/C compressor above this speed (km/h) — protects compressor
+#define AC_SPEED_CUTOFF_KPH       160
+
+// ---- Upshift Light (A11 — Manual Transmission) --------------
+// Illuminates when driver should upshift for best economy.
+// On AT models, A11 is not used (TCU is fully independent per Renix design).
+#define UPSHIFT_MIN_RPM           2200
+#define UPSHIFT_MAX_RPM           3200
+#define UPSHIFT_MIN_TPS_PCT       20     // Only light when actually driving
+
+// ---- Latch Relay (A9) ---------------------------------------
+// ECU holds itself powered via A9 after key-off to complete shutdown tasks
+// (park IAC, save LTFT to EEPROM). Releases after SHUTDOWN_HOLD_MS.
+#define SHUTDOWN_HOLD_MS          3000
+
+// ---- O2 Heater Relay ----------------------------------------
+// O2 heater enabled after a warm-up delay to prevent thermal shock.
+#define O2_HEATER_DELAY_MS        30000  // 30 s after engine start
+#define O2_HEATER_CLT_ENABLE_C    40     // Or when CLT > 40°C, whichever first
 
 // ---- Closed-Loop O2 ----------------------------------------
 #define CL_STOICH_MV              450     // Narrowband stoich crossover (mV)
@@ -108,58 +157,112 @@
 // 0 mV (lean) → ADC 0;   1000 mV (rich) → ADC 1241
 #define O2_MV_PER_ADC_COUNT       (3300.0f / ADC_MAX)
 
-// Battery voltage: 47kΩ/(47kΩ+10kΩ) divider — NOT 10k+47k; redo:
-// Use 33kΩ top + 10kΩ bottom → Vout = Vin × 10/43 = 0.2326
-// At 16V: 3.72V → needs further reduction; use 56kΩ + 10kΩ
-// Vout = Vin × 10/66 = 0.1515;  At 16V: 2.42V → ADC 3005;  12V: ADC 2254
+// Knock sensor: piezo AC signal, 1.65V DC bias applied in hardware.
+// 0–3.3V after bias; midpoint = 2048 (12-bit ADC at 1.65V)
+#define KNOCK_MV_PER_ADC_COUNT    O2_MV_PER_ADC_COUNT
+
+// Battery voltage: 56kΩ + 10kΩ divider → ratio 10/66 = 0.1515
+// At 16V: 2.42V → ADC 3005;  At 12V: 1.82V → ADC 2254
 #define BATT_DIVIDER_RATIO        0.1515f
 
-// VSS: Open-collector hall effect, 8 pulses/rev (many Renix models)
+// VSS: Open-collector hall effect, 8 pulses/rev (stock XJ speed sensor)
 #define VSS_PULSES_PER_REV        8
 #define VSS_TIRE_CIRC_MM          2075   // ~215/75R15 approximate
+// Speed formula: kph = 934000 / period_us  (pre-computed constant)
+#define VSS_KPH_CONSTANT          934000UL
 
-// ---- Teensy 4.1 Pin Assignments ----------------------------
+// High-side digital inputs (12V switched signals → voltage divider to 3.3V)
+// Use 100kΩ top + 22kΩ bottom → ratio 22/122 = 0.180
+// At 12V: 2.16V → HIGH;  At 0V: 0V → LOW.  Safe Schmitt-trigger input.
+#define HIGHSIDE_INPUT_DIVIDER    0.180f
 
-// Crank & Cam Triggers
-#define PIN_CPS_IN                2    // CPS signal (from VR conditioner MAX9926)
-#define PIN_CAM_IN                3    // Cam sync (distributor stator, conditioned)
-#define PIN_VSS_IN                4    // Vehicle speed sensor
+// ============================================================
+// Teensy 4.1 Pin Assignments
+// Pins 0–41 are digital I/O; A0–A9 (pins 14–23) are also analog.
+// ============================================================
 
-// Fuel Injectors (6× N-channel MOSFET, active HIGH = injector open)
-#define PIN_INJ_1                 5
-#define PIN_INJ_2                 6
-#define PIN_INJ_3                 7
-#define PIN_INJ_4                 8
-#define PIN_INJ_5                 9
-#define PIN_INJ_6                 10
+// ---- Crank & Cam Triggers -----------------------------------
+#define PIN_CPS_IN                2    // D1: CPS from MAX9926 VR conditioner (INT)
+#define PIN_CAM_IN                3    // C16: Cam/stator sync from conditioner (INT)
+#define PIN_VSS_IN                4    // VSS hall-effect (INT) — 8 pulses/rev
 
-// Ignition (to ICM coil trigger input)
-#define PIN_IGN_COIL              11
+// ---- Fuel Injectors (6× MOSFET, active HIGH = open) ---------
+#define PIN_INJ_1                 5    // Cylinder 1
+#define PIN_INJ_2                 6    // Cylinder 5
+#define PIN_INJ_3                 7    // Cylinder 3
+#define PIN_INJ_4                 8    // Cylinder 6
+#define PIN_INJ_5                 9    // Cylinder 2
+#define PIN_INJ_6                 10   // Cylinder 4
 
-// IAC Stepper Motor (4 wires: A+, A-, B+, B-)
+// ---- Ignition -----------------------------------------------
+#define PIN_IGN_COIL              11   // To ICM coil trigger (5V square wave)
+#define PIN_UPSHIFT_LIGHT         12   // A11: Upshift indicator lamp (MT only)
+                                       // AT models: leave unconnected per Renix spec
+
+// ---- Analog Inputs (A0–A7 = pins 14–21) --------------------
+#define PIN_TPS                   A0   // C7:  Throttle position sensor
+#define PIN_MAP                   A1   // C6:  MAP sensor signal
+#define PIN_CLT                   A2   // C10: Coolant temp sensor
+#define PIN_IAT                   A3   // C8:  Intake air temp sensor
+#define PIN_O2                    A4   // D9:  O2 sensor signal (narrowband)
+#define PIN_BATT                  A5   // Battery voltage sense (56k+10k divider)
+#define PIN_KNOCK                 A6   // D8:  Knock sensor (1.65V bias required)
+                                       // A7 = pin 21 reserved for future use
+
+// ---- IAC Stepper Motor (4-wire full-step) -------------------
 #define PIN_IAC_A_POS             24
 #define PIN_IAC_A_NEG             25
 #define PIN_IAC_B_POS             26
 #define PIN_IAC_B_NEG             27
 
-// Auxiliary Outputs
-#define PIN_FUEL_PUMP_RELAY       28
-#define PIN_TACH_OUT              29
-#define PIN_CEL                   30    // Check Engine Light
-#define PIN_EGR                   31
-#define PIN_PURGE                 32
-#define PIN_FAN_RELAY             33
+// ---- Switched Outputs ---------------------------------------
+#define PIN_FUEL_PUMP_RELAY       28   // Fuel pump relay (key-on prime + run)
+#define PIN_TACH_OUT              29   // Tachometer signal output
+#define PIN_CEL                   30   // A/MIL: Check Engine Light
+#define PIN_EGR                   31   // A10: EGR solenoid
+#define PIN_PURGE                 32   // A10b: Charcoal canister purge solenoid
+#define PIN_FAN_RELAY             33   // Radiator fan relay
 
-// Analog Inputs (A0=14 … A9=23 on Teensy 4.1)
-#define PIN_TPS                   A0    // = 14
-#define PIN_MAP                   A1    // = 15
-#define PIN_CLT                   A2    // = 16
-#define PIN_IAT                   A3    // = 17
-#define PIN_O2                    A4    // = 18
-#define PIN_BATT                  A5    // = 19
-#define PIN_SPARE_AN1             A6    // = 20
-#define PIN_SPARE_AN2             A7    // = 21
+// ---- High-Side Switch Inputs (12V → 3.3V divider) ----------
+// All use 100kΩ + 22kΩ voltage divider; read with digitalRead (HIGH = active)
+#define PIN_IGN_SW                34   // A2:  Ignition switch (key-on sense)
+#define PIN_START_SIGNAL          35   // C3:  Starter engagement (+12V while cranking)
+#define PIN_PARK_NEUTRAL          36   // C4:  Park/Neutral switch (LOW = in P or N)
+                                       // MT models: tie to GND through 1kΩ (always "P/N")
+#define PIN_AC_REQUEST            37   // A/C thermostat/switch request signal
+
+// ---- Active-Low Switch Inputs (pull-up, close to GND) ------
+#define PIN_PS_PRESSURE           38   // Power steering pressure switch (LOW = high pressure)
+                                       // 1989-90 XJ: on 6-pin under-dash connector
+
+// ---- Controlled Relay Outputs ------------------------------
+#define PIN_AC_CLUTCH             39   // A/C compressor clutch relay
+#define PIN_O2_HEATER             40   // O2 sensor heater relay (delayed enable)
+#define PIN_LATCH_RELAY           41   // A9: ECU self-hold relay (post key-off shutdown)
+
+// ============================================================
+// HARDWARE-ONLY PINS — NO FIRMWARE GPIO ASSIGNMENT NEEDED
+// ============================================================
+// The following Renix harness pins connect directly to hardware
+// on the ECU board and require no MCU GPIO:
+//
+//  C5  (Cam sensor –):        PCB GND — shield return for cam sensor pair
+//  C9  (Factory "not used"):  Leave N/C — confirmed unused in factory FSM
+//  C11 (Injector +12V feed):  Hardwired to fuel pump relay switched output;
+//                              ECU does not switch this rail, injectors do
+//  C12 (TX Serial/Diagnostic):REPLACED by USB Serial (superior interface).
+//                              The factory diagnostic datastream is fully
+//                              superseded by the USB monitor + fault codes.
+//  C13 (Factory "not used"):  Leave N/C — confirmed unused in factory FSM
+//  C14 (MAP sensor +5V):      LM7805 5V output — hardware supply, no GPIO
+//  C15 (TPS +5V):             LM7805 5V output — hardware supply, no GPIO
+//  D2  (GND/Diagnostic GND):  PCB GND
+//  D3  (Sensor ground):       PCB GND (separate pour from power GND)
+//  D10 (Injector +12V feed):  Same rail as C11 — both land on same PCB trace
+//  A22 (+12V constant):       Board power supply input, feeds LM2596 regulator
+//  A32 (ECU ground):          PCB GND, chassis stud
+// ============================================================
 
 // Serial ports
-#define TUNING_SERIAL             Serial    // USB Serial for TunerStudio / monitor
+#define TUNING_SERIAL             Serial    // USB Serial for monitor / tuning
 #define TUNING_BAUD               115200

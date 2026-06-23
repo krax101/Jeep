@@ -1,4 +1,5 @@
 #include "closedloop.h"
+#include "storage.h"
 
 void cl_update(ECUState& state, const ECUConfig& cfg) {
     const SensorData& s = state.sensors;
@@ -6,7 +7,7 @@ void cl_update(ECUState& state, const ECUConfig& cfg) {
 
     // Conditions to allow closed-loop operation
     if (!cfg.cl_enabled)                                   return;
-    if (fs.mode != FuelMode::CLOSED)                       return;
+    if (state.fuel_mode != FuelMode::CLOSED)               return;
     if (s.clt_c < CL_MIN_CLT_C)                           return;
     if (s.rpm   < CL_MIN_RPM)                             return;
     if (state.engine_state == EngineState::CRANKING)       return;
@@ -39,4 +40,13 @@ void cl_update(ECUState& state, const ECUConfig& cfg) {
 
 void cl_reset_stft(FuelState& fs) {
     fs.stft = 0.0f;
+}
+
+void cl_restore_ltft(FuelState& fs, const ECUConfig& cfg) {
+    fs.ltft = cfg.saved_ltft;
+}
+
+void cl_save_ltft(ECUState& state, ECUConfig& cfg) {
+    cfg.saved_ltft = state.fuel.ltft;
+    storage_save(cfg);
 }

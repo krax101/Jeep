@@ -13,3 +13,9 @@ void iac_set_target(IACState& iac, int16_t position);
 
 // Park the IAC (retract to stop, used on shutdown).
 void iac_park(IACState& iac);
+
+// Apply idle-up bumps for accessory loads.  Call from the 100 ms task.
+// ac_on: A/C compressor engaged; ps_load: PS pressure switch active;
+// in_drive: transmission in a drive gear (not P or N).
+void iac_apply_idle_compensation(IACState& iac, bool ac_on,
+                                 bool ps_load, bool in_drive);

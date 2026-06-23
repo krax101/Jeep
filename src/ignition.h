@@ -1,8 +1,9 @@
 #pragma once
 #include "types.h"
 
-// Look up timing advance (degrees BTDC) from table.
-uint8_t ign_calc_advance(const SensorData& s, const ECUConfig& cfg);
+// Look up timing advance (degrees BTDC) from table, minus knock_retard.
+uint8_t ign_calc_advance(const SensorData& s, const ECUConfig& cfg,
+                         uint8_t knock_retard);
 
 // Compute coil dwell time (μs) from RPM.
 uint16_t ign_calc_dwell(uint16_t rpm, const ECUConfig& cfg);

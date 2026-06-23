@@ -143,6 +143,76 @@ less vibration than flywheel).
 3. Set `TRIGGER_SYNC_ANGLE_BTDC` in config.h to match where the missing gap
    aligns relative to cylinder 1 TDC (use a timing light to verify after first start).
 
+## Complete Renix Harness Connector Pin Audit
+
+Every pin on the stock Renix ECU 60-pin connector (two plugs: A-side and C/D-side)
+is accounted for below. "FIRMWARE" = active GPIO in code. "HARDWARE" = PCB trace
+with no firmware assignment required. "N/C" = confirmed unused per Chrysler FSM.
+
+### A-Side Connector (main power / switched outputs)
+| Pin | Signal | This Design | Justification |
+|-----|--------|-------------|---------------|
+| A2  | Ignition switch 12V | FIRMWARE — PIN_IGN_SW (34) | Key-on detection; latch relay logic |
+| A9  | ECU self-hold relay | FIRMWARE — PIN_LATCH_RELAY (41) | Post key-off IAC park + LTFT save |
+| A10 | EGR solenoid / Purge | FIRMWARE — PIN_EGR (31), PIN_PURGE (32) | Active outputs |
+| A11 | Upshift indicator | FIRMWARE — PIN_UPSHIFT_LIGHT (12) | MT economy lamp |
+| A22 | +12V constant | HARDWARE — Board Vin via 20A fuse | Powers LM2596; no GPIO |
+| A32 | ECU GND | HARDWARE — PCB GND pour | Chassis stud connection |
+
+### C-Side Connector (sensors / injectors / triggers)
+| Pin | Signal | This Design | Justification |
+|-----|--------|-------------|---------------|
+| C1  | CPS + | HARDWARE — MAX9926 IN+ | VR conditioner handles signal; OUT → PIN_CPS_IN (2) |
+| C2  | CPS − | HARDWARE — MAX9926 IN− | See C1 |
+| C3  | Starter signal | FIRMWARE — PIN_START_SIGNAL (35) | Early cranking detection |
+| C4  | Park/Neutral sw | FIRMWARE — PIN_PARK_NEUTRAL (36) | Drive idle bump; AT only |
+| C5  | Cam sensor − | HARDWARE — PCB GND | Shield return for cam stator pair |
+| C6  | MAP sensor signal | FIRMWARE — PIN_MAP (A1) | ADC with voltage divider |
+| C7  | TPS signal | FIRMWARE — PIN_TPS (A0) | ADC with voltage divider |
+| C8  | IAT sensor | FIRMWARE — PIN_IAT (A3) | NTC with 2.2 kΩ pullup |
+| C9  | Factory unused | N/C | Confirmed unused in FSM |
+| C10 | CLT sensor | FIRMWARE — PIN_CLT (A2) | NTC with 2.2 kΩ pullup |
+| C11 | Injector +12V | HARDWARE — +12V rail | Hardwired high-side; ECU only switches low-side |
+| C12 | Diagnostic TX | REPLACED — USB Serial | USB at 115200 baud is a superset of factory K-line |
+| C13 | Factory unused | N/C | Confirmed unused in FSM |
+| C14 | MAP sensor +5V | HARDWARE — 5V reg output | Sensor supply; no GPIO |
+| C15 | TPS +5V | HARDWARE — 5V reg output | Same supply rail as MAP |
+| C16 | Cam sensor + | HARDWARE — MAX9926 IN+ (2nd) | OUT → PIN_CAM_IN (3) |
+
+### D-Side Connector (fuel injectors / ignition / O2 / misc)
+| Pin | Signal | This Design | Justification |
+|-----|--------|-------------|---------------|
+| D1  | CPS signal (conditioned) | FIRMWARE — PIN_CPS_IN (2) | Interrupt-driven tooth ISR |
+| D2  | Diagnostic GND | HARDWARE — PCB GND | Serial reference; no GPIO |
+| D3  | Sensor GND | HARDWARE — PCB GND | Separate pour from power GND |
+| D4  | Inj 1 (Cyl 1) | FIRMWARE — PIN_INJ_1 (5) | MOSFET low-side driver |
+| D5  | Inj 2 (Cyl 5) | FIRMWARE — PIN_INJ_2 (6) | MOSFET low-side driver |
+| D6  | Inj 3 (Cyl 3) | FIRMWARE — PIN_INJ_3 (7) | MOSFET low-side driver |
+| D7  | Inj 4 (Cyl 6) | FIRMWARE — PIN_INJ_4 (8) | MOSFET low-side driver |
+| D8  | Knock sensor | FIRMWARE — PIN_KNOCK (A6) | 25 kHz sampling; 1.65V bias required |
+| D9  | O2 sensor | FIRMWARE — PIN_O2 (A4) | Narrowband, direct to ADC |
+| D10 | Injector +12V | HARDWARE — same +12V rail as C11 | Both pins land on same PCB trace |
+| D11 | Inj 5 (Cyl 2) | FIRMWARE — PIN_INJ_5 (9) | MOSFET low-side driver |
+| D12 | Inj 6 (Cyl 4) | FIRMWARE — PIN_INJ_6 (10) | MOSFET low-side driver |
+| D13 | Ignition coil | FIRMWARE — PIN_IGN_COIL (11) | Dwell/fire trigger to stock ICM |
+
+### Additional This-Design Pins (no stock Renix equivalent — new capability)
+| Teensy Pin | Signal | Function |
+|------------|--------|---------|
+| 3  | PIN_CAM_IN | 720° cam sync from distributor stator |
+| 4  | PIN_VSS_IN | Vehicle speed sensor (8 pulses/rev) |
+| 24–27 | PIN_IAC_A/B | 4-wire stepper IAC via L298N |
+| 28 | PIN_FUEL_PUMP_RELAY | Fuel pump prime + run relay |
+| 29 | PIN_TACH_OUT | Tachometer signal (NPN buffer) |
+| 30 | PIN_CEL | MIL / Check Engine Light |
+| 33 | PIN_FAN_RELAY | Radiator cooling fan relay |
+| 37 | PIN_AC_REQUEST | A/C thermostat request input |
+| 38 | PIN_PS_PRESSURE | Power steering pressure switch |
+| 39 | PIN_AC_CLUTCH | A/C compressor clutch relay output |
+| 40 | PIN_O2_HEATER | O2 sensor heater relay (delayed) |
+
+---
+
 ## Notes on Stock Renix Known Issues — What This ECU Fixes
 | Stock Weakness | This Design |
 |----------------|-------------|

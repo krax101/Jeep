@@ -2,11 +2,12 @@
 #include "config.h"
 #include <Arduino.h>
 
-static const char* FAULT_NAMES[] = {
+static const char* FAULT_NAMES[(uint8_t)FaultCode::MAX_CODES] = {
     "NONE", "CLT_HIGH", "CLT_LOW", "IAT_HIGH", "IAT_LOW",
     "TPS_HIGH", "TPS_LOW", "MAP_HIGH", "MAP_LOW",
     "O2_INACTIVE", "CPS_LOSS", "CAM_LOSS",
-    "INJ_OC", "KNOCK", "BATT_HIGH", "BATT_LOW"
+    "INJ_OC", "KNOCK", "BATT_HIGH", "BATT_LOW",
+    "O2_HEATER_FAULT"
 };
 
 void diag_init(DiagState& d) {
