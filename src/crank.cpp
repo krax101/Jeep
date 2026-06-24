@@ -105,6 +105,12 @@ void crank_isr_cam() {
 
 void crank_init(CrankState& cs) {
     memset(&cs, 0, sizeof(cs));
+    // Set last_tooth_us to now BEFORE attaching the interrupt so the first
+    // tooth period reflects real elapsed time, not seconds of boot uptime
+    // from the epoch-0 that memset left.  A boot-time period (~millions of µs)
+    // stored in tooth_period_us would set the gap-detection threshold to
+    // ~1.6 × boot_time, blocking gap detection for many teeth afterward.
+    cs.last_tooth_us = micros();
     s_cs = &cs;
 
     pinMode(PIN_CPS_IN, INPUT);

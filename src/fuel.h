@@ -13,5 +13,6 @@ uint32_t fuel_calc_final_pw(uint32_t base_pw_us, float corr_mult,
 // Should be called at ~50 Hz when RPM and MAP have changed meaningfully.
 void fuel_schedule_events(ECUState& state, const ECUConfig& cfg);
 
-// Update duty cycle reading.
-void fuel_update_dc(FuelState& fs, uint16_t rpm, uint32_t final_pw_us);
+// Update duty cycle reading.  Mode determines the injection cycle period:
+// SEQUENTIAL injects once per 720° (2 revs); BATCH injects once per 360° (1 rev).
+void fuel_update_dc(FuelState& fs, uint16_t rpm, uint32_t final_pw_us, InjMode mode);

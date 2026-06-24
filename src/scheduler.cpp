@@ -98,10 +98,15 @@ void sched_tick(uint16_t current_angle_720_x10, uint32_t tooth_period_us) {
 
         if (angle_passed(s_prev_angle, current_angle_720_x10,
                          s_events[i].angle_720_x10)) {
-            // Compute how many μs since we crossed the trigger angle
-            uint16_t angle_diff = 0;
-            if (current_angle_720_x10 >= s_events[i].angle_720_x10)
-                angle_diff = current_angle_720_x10 - s_events[i].angle_720_x10;
+            // Compute how many μs since we crossed the trigger angle.
+            // Wrap-aware: if the event was at e.g. 7150 and we just passed 0°,
+            // a naive subtraction underflows uint16 giving a massive past_us.
+            uint16_t ev_angle  = s_events[i].angle_720_x10;
+            uint16_t angle_diff;
+            if (current_angle_720_x10 >= ev_angle)
+                angle_diff = current_angle_720_x10 - ev_angle;
+            else
+                angle_diff = (uint16_t)(7200u - ev_angle + current_angle_720_x10);
 
             uint32_t past_us = 0;
             if (tooth_period_us > 0)

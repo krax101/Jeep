@@ -37,12 +37,13 @@ void sensors_vss_isr() {
 void sensors_init() {
     analogReadResolution(ADC_BITS);
     analogReadAveraging(4);  // Teensy 4.x hardware averaging
-    pinMode(PIN_TPS,  INPUT);
-    pinMode(PIN_MAP,  INPUT);
-    pinMode(PIN_CLT,  INPUT);
-    pinMode(PIN_IAT,  INPUT);
-    pinMode(PIN_O2,   INPUT);
-    pinMode(PIN_BATT, INPUT);
+    pinMode(PIN_TPS,   INPUT);
+    pinMode(PIN_MAP,   INPUT);
+    pinMode(PIN_CLT,   INPUT);
+    pinMode(PIN_IAT,   INPUT);
+    pinMode(PIN_O2,    INPUT);
+    pinMode(PIN_BATT,  INPUT);
+    pinMode(PIN_KNOCK, INPUT);  // Envelope follower output — must be INPUT not OUTPUT
 
     // Discrete inputs
     // IGN_SW, START_SIGNAL, AC_REQUEST: 12V signals through 100kΩ/22kΩ divider.

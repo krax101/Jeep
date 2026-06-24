@@ -7,7 +7,8 @@
 // Firing order: cylinder indices 0-based (physical cyl 1-5-3-6-2-4)
 // Index  0  1  2  3  4  5
 // Cyl    1  5  3  6  2  4
-static const uint8_t FIRING_ORDER[ENGINE_CYLINDERS] = {0, 4, 2, 5, 1, 3};
+// Single definition shared via ENGINE_FIRING_ORDER in config.h.
+static const uint8_t FIRING_ORDER[ENGINE_CYLINDERS] = ENGINE_FIRING_ORDER;
 // 720° start angle for each cylinder's intake stroke (crank angle × 10)
 // These are the crank angles at which each cylinder's intake valve opens.
 // Origin: TDC compression of cylinder 1 = 0°.
@@ -107,10 +108,15 @@ void fuel_schedule_events(ECUState& state, const ECUConfig& cfg) {
 }
 
 // ---- Duty Cycle Update --------------------------------------
-void fuel_update_dc(FuelState& fs, uint16_t rpm, uint32_t final_pw_us) {
+void fuel_update_dc(FuelState& fs, uint16_t rpm, uint32_t final_pw_us, InjMode mode) {
     if (rpm == 0) { fs.dc_pct = 0; return; }
-    // Cycle time per cylinder in sequential mode (720° = 2 revolutions)
-    uint32_t cycle_us = (uint32_t)(120000000UL / rpm);  // 2 × 60e6 / RPM
+    // Sequential: one injection per 720° (2 revs) → 120e6/RPM µs per cycle.
+    // Batch: one injection per 360° (1 rev) → 60e6/RPM µs per cycle.
+    // Using the sequential constant in batch mode gives a DC% that is half the
+    // true duty cycle, which would hide over-duty-cycle conditions.
+    uint32_t cycle_us = (mode == InjMode::SEQUENTIAL)
+                        ? (uint32_t)(120000000UL / rpm)
+                        : (uint32_t)(60000000UL  / rpm);
     if (cycle_us == 0) { fs.dc_pct = 99; return; }
     uint32_t dc = final_pw_us * 100 / cycle_us;
     fs.dc_pct = (dc > 99) ? 99 : (uint8_t)dc;

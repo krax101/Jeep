@@ -46,6 +46,11 @@ static void update_engine_state() {
                 st.engine_state = EngineState::WARMUP;
                 float ase_count = table1d_lookup(g_cfg.ase_table, (int16_t)st.sensors.clt_c);
                 st.ase_events_left = (uint8_t)(ase_count > 255 ? 255 : ase_count);
+            } else if (rpm == 0) {
+                // Starter failed or engine stalled during crank — no crank signal
+                // for >2 s (VSS staleness window).  Return to OFF to prevent the
+                // state machine from staying in CRANKING with fuel mode stuck there.
+                st.engine_state = EngineState::OFF;
             }
             break;
         case EngineState::WARMUP:
@@ -200,6 +205,27 @@ static void update_upshift_light() {
     digitalWriteFast(PIN_UPSHIFT_LIGHT, light ? HIGH : LOW);
 }
 
+// ---- Radiator Fan Relay -------------------------------------
+// Enable fan when CLT exceeds threshold; hysteresis prevents rapid cycling.
+// Also enable when A/C is active (condenser cooling).
+#define FAN_ON_CLT_C    95
+#define FAN_OFF_CLT_C   88
+static void update_fan_relay() {
+    ECUState& st = g_state;
+    static bool fan_on = false;
+
+    if (st.ac_active) {
+        // A/C condenser always needs fan airflow
+        fan_on = true;
+    } else if (st.sensors.clt_c >= FAN_ON_CLT_C) {
+        fan_on = true;
+    } else if (st.sensors.clt_c < FAN_OFF_CLT_C) {
+        fan_on = false;
+    }
+
+    digitalWriteFast(PIN_FAN_RELAY, fan_on ? HIGH : LOW);
+}
+
 // ---- Latch Relay (self-hold post key-off) -------------------
 // Keeps ECU powered after key-off for IAC park and LTFT save.
 // Releases the relay after SHUTDOWN_HOLD_MS.
@@ -297,6 +323,11 @@ void setup() {
     g_state.sensors.iat_c   = 20;
     g_state.sensors.batt_mv = 12000;
     g_state.latch_relay_on  = true;
+    // Initialise run_start_ms to now so that (now - run_start_ms) is always a
+    // valid, non-wrap-around duration.  It is overwritten when the engine
+    // actually enters RUNNING state.  Without this, a zero value from memset
+    // makes the O2 warm-up timer appear expired after ~49 days of uptime.
+    g_state.run_start_ms    = millis();
 
     // Restore LTFT from previous run (after memset so it isn't clobbered)
     if (cfg_loaded)
@@ -333,6 +364,7 @@ void loop() {
         update_latch_relay(now);
         update_o2_heater(now);
         update_ac(now);
+        update_fan_relay();
         update_upshift_light();
 
         corrections_accel_update(g_state, (float)g_state.sensors.tps_pct, now, g_cfg);
@@ -350,7 +382,23 @@ void loop() {
     if ((now - t_fuel_calc) >= 20) {
         t_fuel_calc = now;
 
-        if (g_state.fuel_mode == FuelMode::CUT || g_state.rev_limit_active) {
+        // Soft rev limiter: linearly increase injection cut fraction between
+        // REV_LIMIT_SOFT_RPM (5400) and REV_LIMIT_HARD_RPM (5600).
+        // At 5400 RPM: 0% cuts.  At 5500 RPM: ~50% cuts.  Above 5600: hard cut.
+        static uint8_t s_soft_cut_seq = 0;
+        bool soft_cut = false;
+        {
+            uint16_t rpm_now = g_state.sensors.rpm;
+            if (rpm_now >= REV_LIMIT_SOFT_RPM && !g_state.rev_limit_active) {
+                uint16_t range   = REV_LIMIT_HARD_RPM - REV_LIMIT_SOFT_RPM;
+                uint8_t  cut_pct = (uint8_t)((uint32_t)(rpm_now - REV_LIMIT_SOFT_RPM)
+                                             * 100 / range);
+                if (++s_soft_cut_seq >= 100) s_soft_cut_seq = 0;
+                soft_cut = (s_soft_cut_seq < cut_pct);
+            }
+        }
+
+        if (g_state.fuel_mode == FuelMode::CUT || g_state.rev_limit_active || soft_cut) {
             for (uint8_t i = 0; i < ENGINE_CYLINDERS; i++)
                 sched_remove(EventType::INJ_OPEN, i);
         } else {
@@ -366,7 +414,8 @@ void loop() {
             float corr = corrections_calc(g_state.sensors, g_state, g_cfg);
             g_state.fuel.final_pw_us = fuel_calc_final_pw(base_pw, corr,
                                                             g_state.sensors, g_cfg);
-            fuel_update_dc(g_state.fuel, g_state.sensors.rpm, g_state.fuel.final_pw_us);
+            fuel_update_dc(g_state.fuel, g_state.sensors.rpm,
+                           g_state.fuel.final_pw_us, g_state.fuel.mode);
             // Guard event table against concurrent reads by crank ISR (sched_tick)
             noInterrupts();
             fuel_schedule_events(g_state, g_cfg);
@@ -421,7 +470,8 @@ void loop() {
     // ---- 200 ms: Diagnostics --------------------------------
     if ((now - t_diag) >= 200) {
         t_diag = now;
-        diag_update(g_state.diag, g_state.sensors, g_state.crank, now);
+        diag_update(g_state.diag, g_state.sensors, g_state.crank, now,
+                    g_state.run_start_ms);
     }
 
     // ---- 5 ms: Communications ------------------------------

@@ -12,8 +12,8 @@ static const uint16_t CYL_TDC_720_X10[ENGINE_CYLINDERS] = {
     4800,  // Cyl 2: 480°
     6000,  // Cyl 4: 600°
 };
-// Firing order index → cylinder channel mapping
-static const uint8_t FIRING_ORDER[ENGINE_CYLINDERS] = {0, 4, 2, 5, 1, 3};
+// Firing order index → cylinder channel mapping (single source of truth: ENGINE_FIRING_ORDER in config.h)
+static const uint8_t FIRING_ORDER[ENGINE_CYLINDERS] = ENGINE_FIRING_ORDER;
 
 uint8_t ign_calc_advance(const SensorData& s, const ECUConfig& cfg,
                          uint8_t knock_retard) {

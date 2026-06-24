@@ -46,7 +46,7 @@ static uint32_t s_last_cps_ms = 0;
 static uint32_t s_last_tooth_count = 0;
 
 void diag_update(DiagState& d, const SensorData& s, const CrankState& cs,
-                 uint32_t now_ms) {
+                 uint32_t now_ms, uint32_t run_start_ms) {
     // --- CLT sensor ------------------------------------------
     if (s.clt_c >= 115)       diag_set(d, FaultCode::CLT_HIGH);
     else                       diag_clear(d, FaultCode::CLT_HIGH);
@@ -112,7 +112,13 @@ void diag_update(DiagState& d, const SensorData& s, const CrankState& cs,
     }
 
     // --- O2 sensor inactive check (only when engine warm & running) ----
-    if (s.clt_c > 70 && s.rpm > 600) {
+    // The heater doesn't enable until O2_HEATER_DELAY_MS after engine start,
+    // and the sensor needs ~30 s after heater-on to reach operating temperature.
+    // Checking immediately at CLT>70°C would always flag O2_INACTIVE during the
+    // first 60 s of running, permanently inhibiting closed-loop on a cold start.
+    const uint32_t O2_CHECK_DELAY_MS = O2_HEATER_DELAY_MS + 30000UL;
+    bool o2_ready = (now_ms - run_start_ms) >= O2_CHECK_DELAY_MS;
+    if (s.clt_c > 70 && s.rpm > 600 && o2_ready) {
         if (s.o2_mv < 50 || s.o2_mv > 950)
             diag_set(d, FaultCode::O2_INACTIVE);
         else
@@ -121,6 +127,28 @@ void diag_update(DiagState& d, const SensorData& s, const CrankState& cs,
 }
 
 void diag_print(const DiagState& d) {
+    // SAE J2012 five-digit P-codes mapped to each internal FaultCode index.
+    // "P0" + decimal index is not a real code (e.g. index 9 → "P09" ≠ any SAE code).
+    static const char* const OBD_CODES[(uint8_t)FaultCode::MAX_CODES] = {
+        "P0000",  // NONE
+        "P0118",  // CLT_HIGH        ECT Circuit High Input
+        "P0117",  // CLT_LOW         ECT Circuit Low Input
+        "P0113",  // IAT_HIGH        IAT Circuit High Input
+        "P0112",  // IAT_LOW         IAT Circuit Low Input
+        "P0123",  // TPS_HIGH        TP Sensor Circuit High Input
+        "P0122",  // TPS_LOW         TP Sensor Circuit Low Input
+        "P0108",  // MAP_HIGH        MAP Circuit High Input
+        "P0107",  // MAP_LOW         MAP Circuit Low Input
+        "P0136",  // O2_INACTIVE     O2 Sensor Circuit (Bank 1, Sensor 1)
+        "P0335",  // CPS_LOSS        CKP Sensor A Circuit
+        "P0340",  // CAM_LOSS        CMP Sensor A Circuit
+        "P0201",  // INJ_OC          Injector Circuit Open (representative)
+        "P0325",  // KNOCK           Knock Sensor Circuit
+        "P0563",  // BATT_HIGH       System Voltage High
+        "P0562",  // BATT_LOW        System Voltage Low
+        "P0031",  // O2_HEATER_FAULT HO2S Heater Control Circuit Low
+    };
+
     if (d.active_count == 0) {
         TUNING_SERIAL.println(F("DIAG: No active faults"));
         return;
@@ -130,8 +158,8 @@ void diag_print(const DiagState& d) {
     TUNING_SERIAL.println(F(" active fault(s):"));
     for (uint8_t i = 1; i < (uint8_t)FaultCode::MAX_CODES; i++) {
         if (d.active[i]) {
-            TUNING_SERIAL.print(F("  [P0"));
-            TUNING_SERIAL.print(i, DEC);
+            TUNING_SERIAL.print(F("  ["));
+            TUNING_SERIAL.print(OBD_CODES[i]);
             TUNING_SERIAL.print(F("] "));
             TUNING_SERIAL.println(FAULT_NAMES[i]);
         }
