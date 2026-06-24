@@ -25,7 +25,7 @@ static const uint16_t CYL_INTAKE_ANGLE_720_X10[ENGINE_CYLINDERS] = {
 
 // ---- Base Pulse Width Calculation ---------------------------
 // Speed-density: PW = (mass_air_per_stroke / injector_flow) × 1e6 μs/s
-// mass_air = (disp_cc / cyls / 1000) × air_density × VE
+// mass_air = (disp_cc / cyls) × air_density × VE
 // air_density (g/cc) = 1.2041e-3 × (MAP_kPa/101.325) × (298.15/(273.15+IAT_C))
 uint32_t fuel_calc_base_pw(const SensorData& s, const ECUConfig& cfg) {
     float ve = table3d_lookup(cfg.ve_table, s.rpm, s.map_kpa);
@@ -36,7 +36,8 @@ uint32_t fuel_calc_base_pw(const SensorData& s, const ECUConfig& cfg) {
     float air_density_gcc = 1.2041e-3f * map_ratio * temp_ratio;
 
     // Air mass entering cylinder per intake stroke (grams)
-    float air_mass_g = ((float)ENGINE_DISPLACEMENT_CC / ENGINE_CYLINDERS / 1000.0f)
+    // disp_cc/cyls = cc per cylinder; air_density in g/cc → result in grams
+    float air_mass_g = ((float)ENGINE_DISPLACEMENT_CC / ENGINE_CYLINDERS)
                        * air_density_gcc * (ve / 100.0f);
 
     // Fuel mass at stoichiometric ratio
@@ -62,6 +63,13 @@ uint32_t fuel_calc_final_pw(uint32_t base_pw_us, float corr_mult,
 
     float final = (float)base_pw_us * corr_mult + dead_us;
     if (final < (float)INJECTOR_MIN_PW_US) final = (float)INJECTOR_MIN_PW_US;
+
+    // Cap at INJECTOR_MAX_DC_PCT to protect against injector overheating
+    if (s.rpm > 0) {
+        float max_pw = (float)(120000000UL / s.rpm) * INJECTOR_MAX_DC_PCT / 100.0f;
+        if (final > max_pw) final = max_pw;
+    }
+
     return (uint32_t)final;
 }
 

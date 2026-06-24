@@ -165,9 +165,10 @@ static void update_ac(uint32_t now_ms) {
     bool engine_ok = (st.engine_state == EngineState::RUNNING ||
                       st.engine_state == EngineState::WARMUP);
 
-    // Inhibit A/C at WOT or high speed
+    // Inhibit A/C at WOT, high speed, or while clutch is depressed (MT gear change)
     bool inhibit = (st.sensors.tps_pct >= AC_WOT_CUTOFF_TPS_PCT) ||
-                   (st.sensors.vss_kph  >= AC_SPEED_CUTOFF_KPH);
+                   (st.sensors.vss_kph  >= AC_SPEED_CUTOFF_KPH)  ||
+                   (st.sensors.park_neutral);  // park_neutral=true = clutch pedal down (MT)
 
     bool request = st.sensors.ac_request && engine_ok && !inhibit;
 

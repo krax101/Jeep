@@ -3,6 +3,7 @@
 // ============================================================
 // Renix Jeep 4.0L I6 Standalone ECU — Board Configuration
 // Target: Teensy 4.1 (ARM Cortex-M7 @ 600 MHz)
+// Transmission: MANUAL (MT)  — see MT notes throughout file
 //
 // HARNESS AUDIT: Every Renix ECU connector pin is accounted for
 // below, either as a firmware GPIO or as a justified hardware-only
@@ -38,7 +39,7 @@
 // ---- Injectors ----------------------------------------------
 // Renix 4.0: 19.6 lb/hr @ 43.5 PSI, 16 ohm high-impedance
 // Ground-switching MOSFET driver (invert from stock Renix power-switch).
-#define INJECTOR_FLOW_CC_MIN      148.3f    // 19.6 lb/hr converted (0.74 g/cc density)
+#define INJECTOR_FLOW_CC_MIN      200.3f    // 19.6 lb/hr = 200.3 cc/min at 0.74 g/cc (NOT g/min)
 #define INJECTOR_FLOW_G_S         (INJECTOR_FLOW_CC_MIN * ENGINE_FUEL_DENSITY_G_CC / 60.0f)
 #define INJECTOR_REF_KPA          300.0f    // 43.5 PSI in kPa
 #define INJECTOR_DEAD_TIME_14V_US 750       // microseconds at 14V
@@ -83,7 +84,7 @@
 // Idle step compensation bumps (IAC steps added on top of base target)
 #define IDLE_AC_BUMP_STEPS        20      // A/C compressor clutch load
 #define IDLE_PS_BUMP_STEPS        12      // Power steering pump load
-#define IDLE_DRIVE_BUMP_STEPS     15      // Torque converter drag (AT in Drive)
+#define IDLE_DRIVE_BUMP_STEPS     0       // Torque converter drag — AT only; 0 for MT build
 
 // ---- A/C Compressor Control ---------------------------------
 // ECU controls the A/C clutch relay to prevent stall on engagement.
@@ -152,7 +153,7 @@
 #define MAP_ADC_0KPA              401     // 0.48V × 0.673 / 3.3 × 4095
 #define MAP_ADC_104KPA            3763    // 4.5V × 0.673 / 3.3 × 4095 ≈ 3759
 #define MAP_MIN_KPA               10.0f
-#define MAP_MAX_KPA               110.0f
+#define MAP_MAX_KPA               104.0f    // GM 1-bar sensor max output
 
 // O2 Sensor: narrowband, 0–1V output, direct to ADC (safe below 3.3V)
 // 0 mV (lean) → ADC 0;   1000 mV (rich) → ADC 1241
@@ -234,8 +235,9 @@
 // All use 100kΩ + 22kΩ voltage divider; read with digitalRead (HIGH = active)
 #define PIN_IGN_SW                34   // A2:  Ignition switch (key-on sense)
 #define PIN_START_SIGNAL          35   // C3:  Starter engagement (+12V while cranking)
-#define PIN_PARK_NEUTRAL          36   // C4:  Park/Neutral switch (LOW = in P or N)
-                                       // MT models: tie to GND through 1kΩ (always "P/N")
+#define PIN_PARK_NEUTRAL          36   // C4:  MT: clutch pedal switch (NO, shorts to GND when
+                                       //      pedal is depressed). HIGH=clutch engaged, LOW=depressed.
+                                       //      AT models: P/N switch (closes to GND in P or N).
 #define PIN_AC_REQUEST            37   // A/C thermostat/switch request signal
 
 // ---- Active-Low Switch Inputs (pull-up, close to GND) ------

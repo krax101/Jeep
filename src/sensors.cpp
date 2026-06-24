@@ -50,8 +50,9 @@ void sensors_init() {
     pinMode(PIN_IGN_SW,       INPUT);
     pinMode(PIN_START_SIGNAL, INPUT);
     pinMode(PIN_AC_REQUEST,   INPUT);
-    // PARK_NEUTRAL: mechanical switch shorts to GND in P or N (active-low).
-    // PS_PRESSURE: mechanical switch shorts to GND under steering load (active-low).
+    // PARK_NEUTRAL / MT CLUTCH: NO switch shorts to GND when clutch pedal is depressed.
+    // INPUT_PULLUP: pin=HIGH when clutch engaged, LOW when pedal pressed (active-low).
+    // AT equivalent: P/N position switch, same polarity.
     pinMode(PIN_PARK_NEUTRAL, INPUT_PULLUP);
     pinMode(PIN_PS_PRESSURE,  INPUT_PULLUP);
 
@@ -91,7 +92,8 @@ uint8_t adc_to_tps_pct(uint16_t adc) {
 uint8_t adc_to_map_kpa(uint16_t adc) {
     int32_t span = MAP_ADC_104KPA - MAP_ADC_0KPA;
     if (span <= 0) return 101;
-    float kpa = (float)(adc - MAP_ADC_0KPA) * 104.0f / (float)span;
+    // Cast to int32 before subtracting — adc can be below MAP_ADC_0KPA at power-up
+    float kpa = (float)((int32_t)adc - (int32_t)MAP_ADC_0KPA) * 104.0f / (float)span;
     if (kpa < MAP_MIN_KPA) kpa = MAP_MIN_KPA;
     if (kpa > MAP_MAX_KPA) kpa = MAP_MAX_KPA;
     return (uint8_t)kpa;
@@ -155,7 +157,8 @@ void sensors_read_discrete(SensorData& s) {
     s.ign_sw       = digitalRead(PIN_IGN_SW)       == HIGH;
     s.start_signal = digitalRead(PIN_START_SIGNAL) == HIGH;
     s.ac_request   = digitalRead(PIN_AC_REQUEST)   == HIGH;
-    // Mechanical switches to GND: active = LOW (INPUT_PULLUP holds HIGH when open)
+    // MT clutch switch: LOW=pedal depressed (clutch open), HIGH=clutch engaged.
+    // park_neutral=true means "inhibit drive bump and A/C" — same semantics as AT P/N.
     s.park_neutral = digitalRead(PIN_PARK_NEUTRAL) == LOW;
     s.ps_pressure  = digitalRead(PIN_PS_PRESSURE)  == LOW;
 }
