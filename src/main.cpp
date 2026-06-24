@@ -193,7 +193,8 @@ static void update_ac(uint32_t now_ms) {
 static void update_upshift_light() {
     ECUState& st = g_state;
     uint16_t rpm = st.sensors.rpm;
-    bool light = (rpm >= UPSHIFT_MIN_RPM) &&
+    bool light = (st.engine_state == EngineState::RUNNING) &&
+                 (rpm >= UPSHIFT_MIN_RPM) &&
                  (rpm <= UPSHIFT_MAX_RPM) &&
                  (st.sensors.tps_pct >= UPSHIFT_MIN_TPS_PCT);
     digitalWriteFast(PIN_UPSHIFT_LIGHT, light ? HIGH : LOW);
@@ -336,13 +337,13 @@ void loop() {
 
         corrections_accel_update(g_state, (float)g_state.sensors.tps_pct, now, g_cfg);
 
-        // Knock: sample envelope, gate to crank window, apply/recover retard
+        // Knock: sample envelope, gate to crank window, apply/recover retard.
+        // Capture peak BEFORE knock_recover() — recover resets s_peak_mv to 0
+        // when retard is 0, which would always leave knock_mv at 0 in the monitor.
         knock_update(g_state.ign, g_state.diag,
                      crank_angle720_now_x10(g_state.crank), now);
-        knock_recover(g_state.ign, g_state.diag, now);
-
-        // Capture knock peak for comms monitor
         g_state.sensors.knock_mv = knock_get_peak_mv();
+        knock_recover(g_state.ign, g_state.diag, now);
     }
 
     // ---- 20 ms: Fuel & ignition scheduling -----------------
@@ -366,7 +367,10 @@ void loop() {
             g_state.fuel.final_pw_us = fuel_calc_final_pw(base_pw, corr,
                                                             g_state.sensors, g_cfg);
             fuel_update_dc(g_state.fuel, g_state.sensors.rpm, g_state.fuel.final_pw_us);
+            // Guard event table against concurrent reads by crank ISR (sched_tick)
+            noInterrupts();
             fuel_schedule_events(g_state, g_cfg);
+            interrupts();
             corrections_injection_event(g_state, g_cfg);  // Decrement ASE counter
         }
 
@@ -374,7 +378,9 @@ void loop() {
         g_state.ign.advance_deg = ign_calc_advance(g_state.sensors, g_cfg,
                                                     g_state.ign.knock_retard);
         g_state.ign.dwell_us    = ign_calc_dwell(g_state.sensors.rpm, g_cfg);
+        noInterrupts();
         ign_schedule_events(g_state, g_cfg);
+        interrupts();
     }
 
     // ---- 100 ms: Closed loop + IAC -------------------------

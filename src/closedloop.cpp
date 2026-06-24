@@ -13,6 +13,9 @@ void cl_update(ECUState& state, const ECUConfig& cfg) {
     if (state.engine_state == EngineState::CRANKING)       return;
     if (s.tps_pct > 85)                                   return;  // Skip CL at heavy load
     if (state.ae_amount > 0.0f && state.ae_teeth_left > 0) return;  // Skip during AE
+    // Skip if O2 is inactive/faulted — a stuck-lean reading would otherwise
+    // max out STFT at +25% and run the engine rich until LTFT adapts.
+    if (state.diag.active[(uint8_t)FaultCode::O2_INACTIVE]) return;
 
     bool is_rich = (s.o2_mv > CL_STOICH_MV);
 

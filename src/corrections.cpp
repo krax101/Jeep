@@ -14,9 +14,9 @@ float corrections_calc(const SensorData& s, ECUState& state, const ECUConfig& cf
     // --- After-Start Enrichment ---
     if (state.ase_events_left > 0) {
         // 20% extra, decaying — corrections_injection_event decrements counter
-        float ase_frac = (float)state.ase_events_left /
-                         table1d_lookup(cfg.ase_table, (int16_t)s.clt_c);
-        mult += 0.20f * ase_frac;
+        float ase_total = table1d_lookup(cfg.ase_table, (int16_t)s.clt_c);
+        if (ase_total > 0.0f)       // guard: table returns 0 at CLT ≥ 100°C
+            mult += 0.20f * ((float)state.ase_events_left / ase_total);
     }
 
     // --- IAT Correction ---

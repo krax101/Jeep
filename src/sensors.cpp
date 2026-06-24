@@ -135,6 +135,12 @@ void sensors_update(SensorData& s) {
     s.o2_mv   = (uint16_t)(s_o2_f < 0.0f ? 0.0f : s_o2_f);
     s.batt_mv = (uint16_t) s_batt_f;
 
+    // TPS fault: detect open/short at the ADC rail BEFORE the EMA runs.
+    // Checking processed tps_pct == 100% would fire at genuine WOT (false CEL).
+    // TPS_ADC_CLOSED ≈ 500, TPS_ADC_OPEN ≈ 3876; anything below 100 or above
+    // 4000 is outside any physically reachable wiper position on a 3.3V supply.
+    s.tps_fault = (raw_tps < 100) || (raw_tps > 4000);
+
     // VSS: stale after 2 seconds (vehicle stopped)
     noInterrupts();
     uint32_t vss_period = s_vss_period_us;
@@ -165,14 +171,13 @@ void sensors_read_discrete(SensorData& s) {
 
 // ---- Fault Detection ----------------------------------------
 // Flag sensor as faulted if it reads outside the physically plausible range.
+// NOTE: tps_fault is set in sensors_update() from raw ADC before the EMA runs.
 void sensors_check_faults(SensorData& s) {
     // CLT: plausible -40 to 130°C
     s.clt_fault = (s.clt_c <= -39 || s.clt_c >= 125);
     // IAT: plausible -40 to 100°C
     s.iat_fault = (s.iat_c <= -39 || s.iat_c >= 95);
-    // TPS stuck at rail
-    s.tps_fault = (s.tps_pct == 0 && s_tps_f < 0.2f) ||
-                  (s.tps_pct == 100 && s_tps_f > 99.8f);
+    // tps_fault: already set from raw_tps in sensors_update() — do not overwrite
     // MAP outside 10–109 kPa
     s.map_fault = (s.map_kpa < 11 || s.map_kpa > 108);
 }

@@ -1,8 +1,10 @@
 #pragma once
 #include "types.h"
 
-// Maximum number of simultaneously pending engine events
-#define SCHED_MAX_EVENTS  24
+// Maximum number of simultaneously pending engine events.
+// Sequential mode uses 24 slots (6 INJ_OPEN + 6 INJ_CLOSE + 6 IGN_DWELL + 6 IGN_FIRE).
+// 32 gives headroom for mode transitions without silent event drops.
+#define SCHED_MAX_EVENTS  32
 
 // Initialise the scheduler and hardware timer infrastructure.
 void sched_init();

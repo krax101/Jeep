@@ -1,5 +1,6 @@
 #include "crank.h"
 #include "config.h"
+#include "scheduler.h"
 #include <Arduino.h>
 
 // ---- Module-level pointer to shared state -------------------
@@ -24,60 +25,73 @@ void crank_isr_tooth() {
     if (!s_cs) return;
     CrankState& cs = *s_cs;
 
-    uint32_t now = micros_isr();
+    uint32_t now    = micros_isr();
     uint32_t period = now - cs.last_tooth_us;
     cs.last_tooth_us = now;
 
-    // Store in circular buffer for RPM averaging
-    cs.tooth_times[cs.tooth_head % 40] = period;
-    cs.tooth_head++;
+    // --- Missing-tooth detection (36-1: gap period ≈ 2 normal tooth widths) ---
+    // When the gap is detected, the CURRENT tooth is tooth 0 — the first real
+    // tooth after the absent slot.  Set tooth_count = 0 directly; the old 0xFF
+    // sentinel was off-by-one and made every subsequent angle wrong by 10°.
+    // Also: do NOT update tooth_period_us for the gap event — storing the 2×
+    // period would double the detection threshold and break the next gap detection.
+    bool gap = (cs.tooth_period_us > 0 &&
+                period > (uint32_t)(cs.tooth_period_us * MISSING_TOOTH_RATIO));
 
-    // --- Missing tooth detection (36-1: gap ≈ 2 tooth widths) ---
-    if (cs.synced && period > (uint32_t)(cs.tooth_period_us * MISSING_TOOTH_RATIO)) {
-        // This is the gap tooth.  After the gap, tooth_count resets to 0
-        // so the NEXT real tooth becomes tooth 0 (= TRIGGER_SYNC_ANGLE_BTDC).
-        cs.tooth_count  = 0xFF;  // sentinel: increment to 0 on next tooth
-        cs.revolution  ^= 1;    // toggle 720° half on every gap detection
-        // Already synced — no action needed
-    } else if (!cs.synced && period > (uint32_t)(cs.tooth_period_us * MISSING_TOOTH_RATIO) &&
-               cs.tooth_period_us > 0) {
-        // First gap seen — acquire sync
-        cs.tooth_count = 0xFF;
-        cs.synced      = true;
-        cs.revolution  = 0;
+    if (gap) {
+        cs.tooth_count = 0;
+        if (cs.synced) {
+            cs.revolution ^= 1;      // toggle 720° half on every gap
+        } else {
+            cs.synced     = true;    // first gap: acquire sync
+            cs.revolution = 0;
+        }
     } else {
-        // Normal tooth
         cs.tooth_count++;
         if (cs.tooth_count >= (TRIGGER_WHEEL_TEETH - TRIGGER_WHEEL_MISSING))
-            cs.tooth_count = 0;  // safety wrap
+            cs.tooth_count = 0;     // safety wrap (should not occur with good signal)
     }
 
-    cs.tooth_period_us = period;
+    // Update RPM buffer and reference period only for normal (non-gap) teeth.
+    // Including the gap's 2× period would contaminate the RPM average and
+    // corrupt the threshold used by the next gap detection.
+    if (!gap) {
+        cs.tooth_times[cs.tooth_head % 40] = period;
+        cs.tooth_head++;
+        cs.tooth_period_us = period;
+    }
 
-    // Crank angle in 360° space × 10
-    // After gap: tooth 0 = TRIGGER_SYNC_ANGLE_BTDC degrees before TDC #1
-    // Map to 0° at TDC #1:  angle_360 = (tooth * 10 + (360 - BTDC_offset)) % 360
+    // Crank angle in 360° × 10 space, referenced so that TDC cyl-1 = 0°.
+    // Tooth 0 (first tooth after gap) is TRIGGER_SYNC_ANGLE_BTDC before TDC.
     int32_t raw = (int32_t)cs.tooth_count * TRIGGER_DEGREES_PER_TOOTH;
     raw = (raw + (360 - TRIGGER_SYNC_ANGLE_BTDC)) % 360;
     if (raw < 0) raw += 360;
     cs.crank_angle_x10 = (uint16_t)(raw * 10);
 
-    // 720° angle
+    // 720° angle (valid after both 360° sync and cam sync)
     cs.angle_720_x10 = cs.crank_angle_x10 + (cs.revolution ? 3600 : 0);
 
     // Filtered RPM from average of recent tooth periods
-    uint32_t sum = 0;
-    uint8_t n = 0;
-    for (uint8_t i = 0; i < RPM_SMOOTH_TEETH && i < (uint8_t)cs.tooth_head; i++) {
-        sum += cs.tooth_times[(cs.tooth_head - 1 - i) % 40];
-        n++;
+    {
+        uint32_t sum = 0;
+        uint8_t  n   = 0;
+        for (uint8_t i = 0; i < RPM_SMOOTH_TEETH && i < (uint8_t)cs.tooth_head; i++) {
+            sum += cs.tooth_times[(cs.tooth_head - 1 - i) % 40];
+            n++;
+        }
+        if (n > 0 && sum > 0) {
+            uint32_t avg_period = sum / n;
+            cs.rpm_filtered = (uint32_t)(60000000UL /
+                              ((uint32_t)avg_period * TRIGGER_WHEEL_TEETH));
+        }
     }
-    if (n > 0 && sum > 0) {
-        // period_us per tooth → RPM:  rpm = 60e6 / (period_us × total_teeth)
-        uint32_t avg_period = sum / n;
-        cs.rpm_filtered = (uint32_t)(60000000UL /
-                          ((uint32_t)avg_period * (TRIGGER_WHEEL_TEETH)));
-    }
+
+    // Fire any angle-based engine events (injection opens, ignition dwell/spark).
+    // This is the primary call site — events must be triggered here, from the ISR,
+    // to achieve per-tooth (~10°) timing accuracy.  The main-loop sched_tick(0,0)
+    // call only handles the RPM=0 / stalled-engine case.
+    if (cs.synced)
+        sched_tick(cs.angle_720_x10, cs.tooth_period_us);
 }
 
 void crank_isr_cam() {
