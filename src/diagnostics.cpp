@@ -53,6 +53,15 @@ void diag_update(DiagState& d, const SensorData& s, const CrankState& cs,
     if (s.clt_fault && s.clt_c <= -39) diag_set(d, FaultCode::CLT_LOW);
     else                       diag_clear(d, FaultCode::CLT_LOW);
 
+    // --- TPS sensor ------------------------------------------
+    if (s.tps_fault) {
+        if (s.tps_pct <= 2) { diag_set(d, FaultCode::TPS_LOW);  diag_clear(d, FaultCode::TPS_HIGH); }
+        else                 { diag_set(d, FaultCode::TPS_HIGH); diag_clear(d, FaultCode::TPS_LOW);  }
+    } else {
+        diag_clear(d, FaultCode::TPS_HIGH);
+        diag_clear(d, FaultCode::TPS_LOW);
+    }
+
     // --- IAT sensor ------------------------------------------
     if (s.iat_c >= 90)         diag_set(d, FaultCode::IAT_HIGH);
     else                       diag_clear(d, FaultCode::IAT_HIGH);
@@ -79,6 +88,27 @@ void diag_update(DiagState& d, const SensorData& s, const CrankState& cs,
         diag_clear(d, FaultCode::CPS_LOSS);
     } else if (s.rpm > 0 && (now_ms - s_last_cps_ms) > 500) {
         diag_set(d, FaultCode::CPS_LOSS);
+    }
+
+    // --- CAM loss detection (only after cam sync was established) ---
+    // At 500 RPM, cam pulse arrives every 240 ms. Allow 1.5 s between pulses.
+    {
+        static uint32_t s_prev_cam_us = 0;
+        static uint32_t s_last_seen_ms = 0;
+
+        uint32_t cam_now;
+        noInterrupts();
+        cam_now = cs.last_cam_us;
+        interrupts();
+
+        if (cam_now != s_prev_cam_us) {    // new cam pulse arrived
+            s_prev_cam_us = cam_now;
+            s_last_seen_ms = now_ms;
+            diag_clear(d, FaultCode::CAM_LOSS);
+        } else if (cs.cam_synced && s.rpm > 400 &&
+                   (now_ms - s_last_seen_ms) > 1500) {
+            diag_set(d, FaultCode::CAM_LOSS);
+        }
     }
 
     // --- O2 sensor inactive check (only when engine warm & running) ----

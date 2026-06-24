@@ -73,6 +73,7 @@ struct CrankState {
     volatile bool     cam_synced;      // Full 720° reference acquired
     volatile uint8_t  revolution;      // 0=first half, 1=second half of 720°
     volatile uint32_t last_tooth_us;
+    volatile uint32_t last_cam_us;      // Timestamp of last cam pulse (for CAM_LOSS detection)
     volatile uint32_t tooth_period_us; // Period of last tooth
     volatile uint32_t rpm_filtered;
     volatile uint16_t crank_angle_x10; // Current angle × 10 (0–3599)

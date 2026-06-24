@@ -29,7 +29,7 @@ void crank_isr_tooth() {
     cs.last_tooth_us = now;
 
     // Store in circular buffer for RPM averaging
-    cs.tooth_times[cs.tooth_head & 0x1F] = period;
+    cs.tooth_times[cs.tooth_head % 40] = period;
     cs.tooth_head++;
 
     // --- Missing tooth detection (36-1: gap ≈ 2 tooth widths) ---
@@ -69,7 +69,7 @@ void crank_isr_tooth() {
     uint32_t sum = 0;
     uint8_t n = 0;
     for (uint8_t i = 0; i < RPM_SMOOTH_TEETH && i < (uint8_t)cs.tooth_head; i++) {
-        sum += cs.tooth_times[(cs.tooth_head - 1 - i) & 0x1F];
+        sum += cs.tooth_times[(cs.tooth_head - 1 - i) % 40];
         n++;
     }
     if (n > 0 && sum > 0) {
@@ -82,10 +82,9 @@ void crank_isr_tooth() {
 
 void crank_isr_cam() {
     if (!s_cs) return;
-    // Cam pulse arrives once per cam revolution (once per 720° crank).
-    // Use it to lock revolution phase: after cam pulse, revolution = 0.
     s_cs->revolution  = 0;
     s_cs->cam_synced  = true;
+    s_cs->last_cam_us = micros();
 }
 
 // ---- Public API ---------------------------------------------

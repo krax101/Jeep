@@ -14,6 +14,7 @@
 #include "dash.h"
 #include "diagnostics.h"
 #include "comms.h"
+#include "datalog.h"
 #include "storage.h"
 
 // ---- Globals ------------------------------------------------
@@ -223,8 +224,9 @@ static void update_latch_relay(uint32_t now_ms) {
         st.key_off_ms        = now_ms;
 
         // Initiate shutdown sequence
-        iac_park(st.iac);         // Command IAC to parked position
+        iac_park(st.iac);               // Command IAC to parked position
         cl_save_ltft(g_state, g_cfg);   // Persist LTFT to EEPROM
+        datalog_stop();                 // Flush and close SD log file
     }
 
     // Hold power until IAC has moved to park and hold time has elapsed
@@ -304,6 +306,7 @@ void setup() {
     diag_init(g_state.diag);
     iac_init(g_state.iac);
     dash_init();
+    datalog_init();   // Non-fatal if no SD card present
 
     digitalWriteFast(PIN_FUEL_PUMP_RELAY, HIGH);
 
@@ -363,6 +366,7 @@ void loop() {
                                                             g_state.sensors, g_cfg);
             fuel_update_dc(g_state.fuel, g_state.sensors.rpm, g_state.fuel.final_pw_us);
             fuel_schedule_events(g_state, g_cfg);
+            corrections_injection_event(g_state, g_cfg);  // Decrement ASE counter
         }
 
         // Knock retard is already applied inside ign_calc_advance
@@ -393,10 +397,18 @@ void loop() {
         }
     }
 
-    // ---- 100 ms: Digital dash ------------------------------
+    // ---- 100 ms: Digital dash + data log ------------------
     if ((now - t_dash) >= DASH_UPDATE_MS) {
         t_dash = now;
         dash_update(g_state, g_cfg);
+
+        // SD logging: start/stop via 'L' serial command
+        if (comms_logging_requested()) {
+            if (!datalog_active()) datalog_init();
+            datalog_update(g_state);
+        } else if (datalog_active()) {
+            datalog_stop();
+        }
     }
 
     // ---- 200 ms: Diagnostics --------------------------------

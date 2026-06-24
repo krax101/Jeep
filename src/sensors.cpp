@@ -45,10 +45,14 @@ void sensors_init() {
     pinMode(PIN_BATT, INPUT);
 
     // Discrete inputs
-    pinMode(PIN_IGN_SW,       INPUT_PULLUP);
+    // IGN_SW, START_SIGNAL, AC_REQUEST: 12V signals through 100kΩ/22kΩ divider.
+    // Use INPUT (no pullup) — the 22kΩ to GND holds 0V when signal absent.
+    pinMode(PIN_IGN_SW,       INPUT);
     pinMode(PIN_START_SIGNAL, INPUT);
+    pinMode(PIN_AC_REQUEST,   INPUT);
+    // PARK_NEUTRAL: mechanical switch shorts to GND in P or N (active-low).
+    // PS_PRESSURE: mechanical switch shorts to GND under steering load (active-low).
     pinMode(PIN_PARK_NEUTRAL, INPUT_PULLUP);
-    pinMode(PIN_AC_REQUEST,   INPUT_PULLUP);
     pinMode(PIN_PS_PRESSURE,  INPUT_PULLUP);
 
     // VSS: attach interrupt on rising edge
@@ -147,13 +151,12 @@ void sensors_update(SensorData& s) {
 
 // ---- Discrete Inputs ----------------------------------------
 void sensors_read_discrete(SensorData& s) {
+    // 12V-sourced signals through 100kΩ/22kΩ divider: active = HIGH (2.16V at pin)
     s.ign_sw       = digitalRead(PIN_IGN_SW)       == HIGH;
     s.start_signal = digitalRead(PIN_START_SIGNAL) == HIGH;
-    // P/N switch: active-low (switch pulls to GND when in P or N)
+    s.ac_request   = digitalRead(PIN_AC_REQUEST)   == HIGH;
+    // Mechanical switches to GND: active = LOW (INPUT_PULLUP holds HIGH when open)
     s.park_neutral = digitalRead(PIN_PARK_NEUTRAL) == LOW;
-    // A/C request: active-low (switch pulls to GND when requesting A/C)
-    s.ac_request   = digitalRead(PIN_AC_REQUEST)   == LOW;
-    // PS pressure switch: closes to GND when steering load is detected
     s.ps_pressure  = digitalRead(PIN_PS_PRESSURE)  == LOW;
 }
 

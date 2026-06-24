@@ -78,6 +78,17 @@
 | 1 | 470nF ceramic/film capacitor | RC envelope hold capacitor | |
 | 1 | Stock Renix knock sensor | Piezoelectric, block-mounted, M8 thread | ~6.7 kHz center; part # varies by year |
 
+## Data Logging
+The Teensy 4.1 has a **built-in micro-SD card socket** connected to the SDIO (USDHC) bus.
+No additional wiring or components are required.
+| Qty | Part | Description | Notes |
+|-----|------|-------------|-------|
+| 1 | micro-SD card (any brand, ≥ 1 GB, FAT32) | Data log storage | 10 Hz CSV logging: RPM/TPS/MAP/CLT/IAT/O2/BATT/VSS/STFT/LTFT/ADV/KNOCK |
+
+> Enable logging at runtime with the `L` serial command.
+> Logs auto-name as LOG0001.CSV, LOG0002.CSV … on the SD card root.
+> Logging stops gracefully on key-off (latch relay shutdown sequence closes the file).
+
 ## Digital Dashboard
 | Qty | Part | Description | Notes |
 |-----|------|-------------|-------|
