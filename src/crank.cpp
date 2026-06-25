@@ -9,8 +9,14 @@ static CrankState* s_cs = nullptr;
 // Number of teeth we average for RPM filtering
 #define RPM_SMOOTH_TEETH  6
 
-// Factor by which tooth period must exceed average to be a gap
+// Gap detection: ratio of gap period to a normal tooth period.
+//   36-1 (1 missing tooth): gap = 2 × normal → threshold 1.6 (between 1× and 2×).
+//   44-2 (2 missing teeth): gap = 3 × normal → threshold 2.2 (between 2× and 3×).
+#if TRIGGER_MODE == TRIGGER_MODE_RENIX_44
+#define MISSING_TOOTH_RATIO  2.2f
+#else
 #define MISSING_TOOTH_RATIO  1.6f
+#endif
 
 // ---- ISR Helpers --------------------------------------------
 
@@ -63,10 +69,17 @@ void crank_isr_tooth() {
 
     // Crank angle in 360° × 10 space, referenced so that TDC cyl-1 = 0°.
     // Tooth 0 (first tooth after gap) is TRIGGER_SYNC_ANGLE_BTDC before TDC.
-    int32_t raw = (int32_t)cs.tooth_count * TRIGGER_DEGREES_PER_TOOTH;
-    raw = (raw + (360 - TRIGGER_SYNC_ANGLE_BTDC)) % 360;
-    if (raw < 0) raw += 360;
-    cs.crank_angle_x10 = (uint16_t)(raw * 10);
+    //
+    // Use divide-last (tooth_count × 3600 / teeth) rather than multiplying by
+    // TRIGGER_DEGREES_PER_TOOTH (integer truncated).  For 44-2, the truncated
+    // 8°/tooth constant accumulates 8° of error by the last tooth of the
+    // revolution; the divide-last form has at most 1 unit (0.1°) non-
+    // accumulating error at any tooth — same as the 36-1 case (exact: 10°).
+    int32_t angle_x10 = (int32_t)cs.tooth_count * 3600 / TRIGGER_WHEEL_TEETH;
+    int32_t offset_x10 = (360 - TRIGGER_SYNC_ANGLE_BTDC) * 10;
+    angle_x10 = (angle_x10 + offset_x10) % 3600;
+    if (angle_x10 < 0) angle_x10 += 3600;
+    cs.crank_angle_x10 = (uint16_t)angle_x10;
 
     // 720° angle (valid after both 360° sync and cam sync)
     cs.angle_720_x10 = cs.crank_angle_x10 + (cs.revolution ? 3600 : 0);
@@ -132,10 +145,12 @@ uint16_t crank_angle_now_x10(const CrankState& cs) {
     if (!cs.synced) return 0;
     uint32_t elapsed = micros() - cs.last_tooth_us;
     if (cs.tooth_period_us == 0) return cs.crank_angle_x10;
-    // Interpolate within current tooth
-    uint32_t offset_x10 = (elapsed * TRIGGER_DEGREES_PER_TOOTH * 10) / cs.tooth_period_us;
-    if (offset_x10 > (uint32_t)(TRIGGER_DEGREES_PER_TOOTH * 10))
-        offset_x10 = TRIGGER_DEGREES_PER_TOOTH * 10;
+    // One tooth spans 3600/TRIGGER_WHEEL_TEETH units in ×10-degree space.
+    // Using the same divide-last formula as the ISR avoids truncation of
+    // TRIGGER_DEGREES_PER_TOOTH (8 instead of 8.18 for the 44-2 wheel).
+    const uint32_t tooth_span_x10 = 3600u / TRIGGER_WHEEL_TEETH;
+    uint32_t offset_x10 = (elapsed * tooth_span_x10) / cs.tooth_period_us;
+    if (offset_x10 > tooth_span_x10) offset_x10 = tooth_span_x10;
     uint32_t angle = (uint32_t)cs.crank_angle_x10 + offset_x10;
     return (uint16_t)(angle % 3600);
 }
@@ -145,9 +160,9 @@ uint16_t crank_angle720_now_x10(const CrankState& cs) {
     uint32_t elapsed = micros() - cs.last_tooth_us;
     uint32_t offset_x10 = 0;
     if (cs.tooth_period_us > 0) {
-        offset_x10 = (elapsed * TRIGGER_DEGREES_PER_TOOTH * 10) / cs.tooth_period_us;
-        if (offset_x10 > (uint32_t)(TRIGGER_DEGREES_PER_TOOTH * 10))
-            offset_x10 = TRIGGER_DEGREES_PER_TOOTH * 10;
+        const uint32_t tooth_span_x10 = 3600u / TRIGGER_WHEEL_TEETH;
+        offset_x10 = (elapsed * tooth_span_x10) / cs.tooth_period_us;
+        if (offset_x10 > tooth_span_x10) offset_x10 = tooth_span_x10;
     }
     uint32_t angle = (uint32_t)cs.angle_720_x10 + offset_x10;
     return (uint16_t)(angle % 7200);

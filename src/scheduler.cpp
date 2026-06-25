@@ -110,8 +110,12 @@ void sched_tick(uint16_t current_angle_720_x10, uint32_t tooth_period_us) {
 
             uint32_t past_us = 0;
             if (tooth_period_us > 0)
+                // Denominator is one tooth's worth of ×10-degree units.
+                // 3600/TRIGGER_WHEEL_TEETH matches the divide-last formula used
+                // in crank.cpp; TRIGGER_DEGREES_PER_TOOTH*10 truncates (e.g.
+                // 80 instead of 81 for the 44-2 wheel), biasing past_us ~1% low.
                 past_us = ((uint32_t)angle_diff * tooth_period_us) /
-                          (TRIGGER_DEGREES_PER_TOOTH * 10);
+                          (3600u / TRIGGER_WHEEL_TEETH);
 
             uint32_t fire_delay = (s_events[i].delay_us > past_us)
                                   ? (s_events[i].delay_us - past_us) : 0;

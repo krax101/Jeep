@@ -18,18 +18,40 @@
 #define ENGINE_FUEL_DENSITY_G_CC  0.74f
 
 // ---- Trigger Wheel ------------------------------------------
-// 36-1 missing tooth wheel on harmonic balancer (recommended upgrade).
-// Stock Renix option: set TRIGGER_WHEEL_TEETH = 44 and TRIGGER_MISSING = 2
-// for the flywheel pattern; Renix decoder mode is selected via TRIGGER_MODE.
+// Using the factory Renix 4.0L flywheel reluctor (44-2 pattern):
+//   44 positions around the flywheel, 2 adjacent missing teeth.
+//   CPS mounts in the OEM bell-housing boss — no fabrication needed.
+//   Resolution: 360°/44 ≈ 8.18° per tooth.
+//
+// Alternative: 36-1 missing-tooth wheel pressed onto the harmonic balancer.
+//   Better resolution (10° per tooth) but requires custom fabrication.
+//   To switch: set TRIGGER_MODE = TRIGGER_MODE_MISSING_TOOTH,
+//   TRIGGER_WHEEL_TEETH = 36, TRIGGER_WHEEL_MISSING = 1, and adjust BTDC.
 #define TRIGGER_MODE_MISSING_TOOTH  0
 #define TRIGGER_MODE_RENIX_44       1
 
-#define TRIGGER_MODE              TRIGGER_MODE_MISSING_TOOTH
-#define TRIGGER_WHEEL_TEETH       36
-#define TRIGGER_WHEEL_MISSING     1
-#define TRIGGER_DEGREES_PER_TOOTH (360 / TRIGGER_WHEEL_TEETH)   // 10°
-// Crank angle at FIRST tooth after missing gap (degrees BTDC of cylinder 1 TDC compression)
-#define TRIGGER_SYNC_ANGLE_BTDC   66
+#define TRIGGER_MODE              TRIGGER_MODE_RENIX_44
+#define TRIGGER_WHEEL_TEETH       44
+#define TRIGGER_WHEEL_MISSING     2
+#define TRIGGER_DEGREES_PER_TOOTH (360 / TRIGGER_WHEEL_TEETH)   // 8° (integer; 8.18° true)
+
+// Crank angle of the FIRST tooth after the missing-tooth gap, measured in
+// degrees BTDC of cylinder 1 TDC compression.
+//
+// *** THIS VALUE MUST BE VERIFIED WITH A TIMING LIGHT BEFORE DRIVING. ***
+//
+// Calibration procedure:
+//   1. Set the ignition table to 0° advance at idle (TDC).
+//   2. Start the engine and aim a timing light at the crank pulley mark.
+//   3. The mark should align with 0° BTDC on the timing tab.
+//   4. If the mark reads X° BTDC instead, INCREASE this value by X.
+//      If the mark reads X° ATDC instead, DECREASE this value by X.
+//   5. Recompile, reflash, recheck until the timing light confirms 0° BTDC
+//      when the ignition table commands 0°, then restore your advance table.
+//
+// 50° is a reasonable starting point for the stock Renix bell-housing CPS
+// position, but the true value depends on the individual CPS bracket location.
+#define TRIGGER_SYNC_ANGLE_BTDC   50
 
 // ---- ADC Resolution -----------------------------------------
 #define ADC_BITS                  12
