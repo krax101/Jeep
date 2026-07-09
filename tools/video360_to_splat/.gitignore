@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+viewer/node_modules
+viewer/test.splat
+viewer/test.ply

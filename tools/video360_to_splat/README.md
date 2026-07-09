@@ -50,8 +50,8 @@ ns-train splatfacto colmap --data dataset/
 python video360_to_splat.py train --out dataset/ --trainer opensplat
 ```
 
-View the resulting `.ply` in [SuperSplat](https://playcanvas.com/supersplat/editor)
-or [antimatter15/splat](https://antimatter15.com/splat/).
+View the result with the bundled viewer (see below), or in
+[SuperSplat](https://playcanvas.com/supersplat/editor).
 
 Stages can also run one at a time (`frames`, `views`, `sfm`, `train`), all
 sharing the same `--out` directory — useful for re-running SfM with
@@ -80,6 +80,41 @@ locked intrinsics match.
 - Lock exposure/white balance on the camera if you can.
 - Stitch dual-fisheye footage to equirectangular (2:1 aspect) with the
   vendor app first; the tool warns if the input isn't 2:1.
+
+## Viewer
+
+`viewer/index.html` is a self-contained WebGL2 Gaussian splat viewer — one
+file, no dependencies, works offline. Open it in a browser and drop in a
+`.splat` or a trainer-output `.ply`, or serve it with a scene URL:
+
+```sh
+python -m http.server -d .          # from this directory
+# then open http://localhost:8000/viewer/index.html?url=/path/to/scene.ply
+```
+
+Fly controls:
+
+| Input | Action |
+|---|---|
+| click | capture the mouse |
+| mouse | look around |
+| `W` `A` `S` `D` | move forward / left / back / right |
+| `Space` or `E` | move up |
+| `Ctrl`, `C` or `Q` | move down (`C`/`Q` avoid the browser's `Ctrl+W`) |
+| `Shift` | sprint (4x) |
+| scroll wheel | adjust fly speed |
+| `R` | reset camera · `Esc` releases the mouse |
+
+It renders with the standard splatting approach: per-splat 3D covariance
+packed into a texture, depth-sorted front-to-back in a web worker
+(counting sort), and composited as instanced quads with a Gaussian falloff
+shader.
+
+The viewer has its own end-to-end test, run headlessly with Playwright:
+`python viewer/make_test_splat.py` builds a synthetic scene with markers
+at known positions, and `node viewer/test_viewer.mjs` checks projection
+directions, occlusion order, `.ply` parsing, and every movement key
+against rendered pixels.
 
 ## Verifying the geometry
 

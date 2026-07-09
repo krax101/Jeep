@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gaussian Splat Viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14161a; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .panel {
+    position: absolute; color: #cfd3da; font: 13px/1.5 system-ui, sans-serif;
+    background: rgba(20, 22, 26, 0.75); border: 1px solid #2c3038;
+    border-radius: 8px; padding: 10px 14px; user-select: none;
+  }
+  #help { left: 12px; top: 12px; }
+  #help b { color: #fff; }
+  #help kbd {
+    background: #2c3038; border-radius: 4px; padding: 0 5px;
+    font: 12px ui-monospace, monospace; color: #fff;
+  }
+  #status { right: 12px; top: 12px; text-align: right; }
+  #drop {
+    left: 50%; top: 50%; transform: translate(-50%, -50%);
+    text-align: center; font-size: 15px; padding: 28px 36px;
+  }
+  #drop input { display: block; margin: 14px auto 0; color: #cfd3da; }
+  #err { color: #ff7b72; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div id="help" class="panel">
+  <b>Gaussian Splat Viewer</b><br>
+  <kbd>click</kbd> capture mouse &nbsp;·&nbsp; <kbd>mouse</kbd> look around<br>
+  <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp;·&nbsp;
+  <kbd>Space</kbd>/<kbd>E</kbd> up &nbsp;·&nbsp; <kbd>Ctrl</kbd>/<kbd>C</kbd>/<kbd>Q</kbd> down<br>
+  <kbd>Shift</kbd> sprint &nbsp;·&nbsp; <kbd>wheel</kbd> speed &nbsp;·&nbsp; <kbd>R</kbd> reset &nbsp;·&nbsp; <kbd>Esc</kbd> release mouse<br>
+  <span style="color:#8b929e">Tip: Ctrl works, but browsers own Ctrl+W — C/Q are safer while moving.</span>
+</div>
+
+<div id="status" class="panel">no scene</div>
+
+<div id="drop" class="panel">
+  <b>Drop a .splat or .ply (3D Gaussian splatting) file here</b><br>
+  or open with <code>?url=scene.splat</code>
+  <input id="file" type="file" accept=".splat,.ply">
+  <div id="err"></div>
+</div>
+
+<script type="text/js-worker" id="worker-src">
+// ---- sort/pack worker -------------------------------------------------
+// Receives the raw 32-byte-per-splat buffer once, packs it into texture
+// data (center + 3D covariance halves + rgba), then re-sorts splats
+// front-to-back every time the main thread sends a new view matrix.
+let fbuf = null, ubuf = null, count = 0;
+
+const _f = new Float32Array(1);
+const _i = new Int32Array(_f.buffer);
+function floatToHalf(v) {
+  _f[0] = v;
+  const x = _i[0];
+  const sign = (x >> 16) & 0x8000;
+  let exp = ((x >> 23) & 0xff) - 127 + 15;
+  let frac = x & 0x7fffff;
+  if (exp <= 0) return sign;                    // flush denormals to 0
+  if (exp >= 31) return sign | 0x7c00;          // inf
+  return sign | (exp << 10) | (frac >> 13);
+}
+const pack2 = (a, b) => (floatToHalf(a) | (floatToHalf(b) << 16)) >>> 0;
+
+function generateTexture() {
+  const texWidth = 2048;                        // 2 texels per splat, 1024 splats/row
+  const texHeight = Math.max(1, Math.ceil((2 * count) / texWidth));
+  const tex = new Uint32Array(texWidth * texHeight * 4);
+  const texF = new Float32Array(tex.buffer);
+
+  for (let i = 0; i < count; i++) {
+    // record: pos 3f | scale 3f | rgba 4B | quat 4B (x128+128, order w x y z)
+    texF[8 * i + 0] = fbuf[8 * i + 0];
+    texF[8 * i + 1] = fbuf[8 * i + 1];
+    texF[8 * i + 2] = fbuf[8 * i + 2];
+
+    const sx = fbuf[8 * i + 3], sy = fbuf[8 * i + 4], sz = fbuf[8 * i + 5];
+    const qw = (ubuf[32 * i + 28] - 128) / 128, qx = (ubuf[32 * i + 29] - 128) / 128,
+          qy = (ubuf[32 * i + 30] - 128) / 128, qz = (ubuf[32 * i + 31] - 128) / 128;
+    const R = [
+      1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qw * qz), 2 * (qx * qz + qw * qy),
+      2 * (qx * qy + qw * qz), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qw * qx),
+      2 * (qx * qz - qw * qy), 2 * (qy * qz + qw * qx), 1 - 2 * (qx * qx + qy * qy),
+    ];
+    // M = R * diag(scale); sigma = M M^T (upper triangle)
+    const M = [
+      R[0] * sx, R[1] * sy, R[2] * sz,
+      R[3] * sx, R[4] * sy, R[5] * sz,
+      R[6] * sx, R[7] * sy, R[8] * sz,
+    ];
+    const s00 = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
+    const s01 = M[0] * M[3] + M[1] * M[4] + M[2] * M[5];
+    const s02 = M[0] * M[6] + M[1] * M[7] + M[2] * M[8];
+    const s11 = M[3] * M[3] + M[4] * M[4] + M[5] * M[5];
+    const s12 = M[3] * M[6] + M[4] * M[7] + M[5] * M[8];
+    const s22 = M[6] * M[6] + M[7] * M[7] + M[8] * M[8];
+    // x4 because the quad spans [-2, 2] sigmas
+    tex[8 * i + 4] = pack2(4 * s00, 4 * s01);
+    tex[8 * i + 5] = pack2(4 * s02, 4 * s11);
+    tex[8 * i + 6] = pack2(4 * s12, 4 * s22);
+    tex[8 * i + 7] = (ubuf[32 * i + 24] | (ubuf[32 * i + 25] << 8) |
+                      (ubuf[32 * i + 26] << 16) | (ubuf[32 * i + 27] << 24)) >>> 0;
+  }
+  postMessage({ texdata: tex, texWidth, texHeight }, [tex.buffer]);
+}
+
+function sort(viewProj) {
+  // Depth along the third row of proj*view increases with distance;
+  // counting-sort ascending -> front-to-back for under-compositing.
+  const depths = new Float32Array(count);
+  let min = Infinity, max = -Infinity;
+  for (let i = 0; i < count; i++) {
+    const d = viewProj[2] * fbuf[8 * i] + viewProj[6] * fbuf[8 * i + 1] + viewProj[10] * fbuf[8 * i + 2];
+    depths[i] = d;
+    if (d < min) min = d;
+    if (d > max) max = d;
+  }
+  const buckets = 256 * 256;
+  const scale = max > min ? (buckets - 1) / (max - min) : 0;
+  const counts = new Uint32Array(buckets);
+  const keys = new Uint32Array(count);
+  for (let i = 0; i < count; i++) {
+    keys[i] = ((depths[i] - min) * scale) | 0;
+    counts[keys[i]]++;
+  }
+  const starts = new Uint32Array(buckets);
+  for (let i = 1; i < buckets; i++) starts[i] = starts[i - 1] + counts[i - 1];
+  const order = new Uint32Array(count);
+  for (let i = 0; i < count; i++) order[starts[keys[i]]++] = i;
+  postMessage({ depthIndex: order }, [order.buffer]);
+}
+
+onmessage = (e) => {
+  if (e.data.buffer) {
+    ubuf = new Uint8Array(e.data.buffer);
+    fbuf = new Float32Array(e.data.buffer);
+    count = e.data.count;
+    generateTexture();
+    sort(e.data.viewProj);
+  } else if (e.data.viewProj) {
+    if (count) sort(e.data.viewProj);
+  }
+};
+</script>
+
+<script>
+"use strict";
+// ---- tiny column-major mat4 helpers ------------------------------------
+function mul4(a, b) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++)
+    for (let r = 0; r < 4; r++)
+      o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+  return o;
+}
+function perspective(fx, fy, w, h, near = 0.05, far = 1000) {
+  // y is flipped: the splat data uses the COLMAP convention (y down, z forward)
+  return new Float32Array([
+    (2 * fx) / w, 0, 0, 0,
+    0, -(2 * fy) / h, 0, 0,
+    0, 0, far / (far - near), 1,
+    0, 0, -(far * near) / (far - near), 0,
+  ]);
+}
+
+// ---- camera -------------------------------------------------------------
+// World frame matches the data: x right, y DOWN, z forward. "Up" is -y.
+const HOME = { x: 0, y: 0, z: -5, yaw: 0, pitch: 0 };
+const cam = { ...HOME, speed: 2.0 };
+
+function viewMatrix() {
+  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  // R = Ry(yaw) * Rx(pitch), camera-to-world; view = R^T | -R^T p
+  const R = [
+    cy, 0, -sy,
+    sy * sp, cp, cy * sp,
+    sy * cp, -sp, cy * cp,
+  ]; // rows of R^T (i.e. columns of R)
+  const p = [cam.x, cam.y, cam.z];
+  const v = new Float32Array(16);
+  for (let c = 0; c < 3; c++)
+    for (let r = 0; r < 3; r++) v[c * 4 + r] = R[r * 3 + c];
+  for (let r = 0; r < 3; r++)
+    v[12 + r] = -(v[0 + r] * p[0] + v[4 + r] * p[1] + v[8 + r] * p[2]);
+  v[15] = 1;
+  return v;
+}
+
+// ---- WebGL setup ---------------------------------------------------------
+const canvas = document.getElementById("canvas");
+const statusEl = document.getElementById("status");
+const dropEl = document.getElementById("drop");
+const errEl = document.getElementById("err");
+const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
+if (!gl) { errEl.textContent = "WebGL2 is required."; throw new Error("no webgl2"); }
+
+const VS = `#version 300 es
+precision highp float;
+precision highp int;
+uniform highp usampler2D u_tex;
+uniform mat4 projection, view;
+uniform vec2 focal, viewport;
+in vec2 position;
+in uint index;
+out vec4 vColor;
+out vec2 vPosition;
+void main() {
+  ivec2 t0 = ivec2((int(index) & 1023) << 1, int(index) >> 10);
+  uvec4 cen = texelFetch(u_tex, t0, 0);
+  vec4 camPos = view * vec4(uintBitsToFloat(cen.xyz), 1.0);
+  vec4 pos2d = projection * camPos;
+  float clip = 1.2 * pos2d.w;
+  if (pos2d.z < -clip || pos2d.x < -clip || pos2d.x > clip || pos2d.y < -clip || pos2d.y > clip) {
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+    return;
+  }
+  uvec4 cov = texelFetch(u_tex, t0 + ivec2(1, 0), 0);
+  vec2 u1 = unpackHalf2x16(cov.x), u2 = unpackHalf2x16(cov.y), u3 = unpackHalf2x16(cov.z);
+  mat3 Vrk = mat3(u1.x, u1.y, u2.x,  u1.y, u2.y, u3.x,  u2.x, u3.x, u3.y);
+  mat3 J = mat3(
+    focal.x / camPos.z, 0.0, -(focal.x * camPos.x) / (camPos.z * camPos.z),
+    0.0, -focal.y / camPos.z, (focal.y * camPos.y) / (camPos.z * camPos.z),
+    0.0, 0.0, 0.0
+  );
+  mat3 T = transpose(mat3(view)) * J;
+  mat3 cov2d = transpose(T) * Vrk * T;
+  cov2d[0][0] += 0.3;
+  cov2d[1][1] += 0.3;
+  float mid = (cov2d[0][0] + cov2d[1][1]) / 2.0;
+  float radius = length(vec2((cov2d[0][0] - cov2d[1][1]) / 2.0, cov2d[0][1]));
+  float l1 = mid + radius, l2 = mid - radius;
+  if (l2 < 0.0) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; }
+  // Eigenvector of the larger eigenvalue; (0,0) happens for circular or
+  // axis-aligned splats, where the major axis is simply +x.
+  vec2 ev = vec2(cov2d[0][1], l1 - cov2d[0][0]);
+  vec2 diag = dot(ev, ev) > 1e-12 ? normalize(ev) : vec2(1.0, 0.0);
+  vec2 major = min(sqrt(2.0 * l1), 1024.0) * diag;
+  vec2 minor = min(sqrt(2.0 * l2), 1024.0) * vec2(diag.y, -diag.x);
+  vColor = vec4(float(cov.w & 255u), float((cov.w >> 8) & 255u),
+                float((cov.w >> 16) & 255u), float((cov.w >> 24) & 255u)) / 255.0;
+  vPosition = position;
+  vec2 center = pos2d.xy / pos2d.w;
+  gl_Position = vec4(center + position.x * major / viewport + position.y * minor / viewport, 0.0, 1.0);
+}`;
+
+const FS = `#version 300 es
+precision highp float;
+in vec4 vColor;
+in vec2 vPosition;
+out vec4 fragColor;
+void main() {
+  float A = -dot(vPosition, vPosition);
+  if (A < -4.0) discard;
+  float B = exp(A) * vColor.a;
+  fragColor = vec4(B * vColor.rgb, B);
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+
+gl.disable(gl.DEPTH_TEST);
+gl.enable(gl.BLEND);
+// front-to-back "under" compositing: out = src*(1-dst.a) + dst
+gl.blendFunc(gl.ONE_MINUS_DST_ALPHA, gl.ONE);
+gl.clearColor(0, 0, 0, 0);
+
+const u = (n) => gl.getUniformLocation(prog, n);
+const uProj = u("projection"), uView = u("view"), uFocal = u("focal"), uViewport = u("viewport");
+gl.uniform1i(u("u_tex"), 0);
+
+const quad = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-2, -2, 2, -2, -2, 2, 2, 2]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, "position");
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+const indexBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, indexBuf);
+const aIdx = gl.getAttribLocation(prog, "index");
+gl.enableVertexAttribArray(aIdx);
+gl.vertexAttribIPointer(aIdx, 1, gl.UNSIGNED_INT, 0, 0);
+gl.vertexAttribDivisor(aIdx, 1);
+
+const texture = gl.createTexture();
+gl.activeTexture(gl.TEXTURE0);
+gl.bindTexture(gl.TEXTURE_2D, texture);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+let proj = null, focal = [1, 1];
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(innerWidth * dpr);
+  canvas.height = Math.round(innerHeight * dpr);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  const fovY = 65 * Math.PI / 180;
+  const fy = canvas.height / (2 * Math.tan(fovY / 2));
+  focal = [fy, fy];
+  proj = perspective(focal[0], focal[1], canvas.width, canvas.height);
+}
+addEventListener("resize", resize);
+resize();
+
+// ---- worker + sorting ----------------------------------------------------
+const worker = new Worker(URL.createObjectURL(
+  new Blob([document.getElementById("worker-src").textContent], { type: "text/javascript" })
+));
+let splatCount = 0, drawCount = 0;
+let sortRunning = false, sortPending = false, lastSortedView = null;
+
+worker.onmessage = (e) => {
+  if (e.data.texdata) {
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32UI, e.data.texWidth, e.data.texHeight, 0,
+                  gl.RGBA_INTEGER, gl.UNSIGNED_INT, e.data.texdata);
+  } else if (e.data.depthIndex) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, indexBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, e.data.depthIndex, gl.DYNAMIC_DRAW);
+    drawCount = e.data.depthIndex.length;
+    sortRunning = false;
+    if (sortPending) { sortPending = false; requestSort(); }
+  }
+};
+
+function requestSort() {
+  if (!splatCount) return;
+  if (sortRunning) { sortPending = true; return; }
+  sortRunning = true;
+  lastSortedView = mul4(proj, viewMatrix());
+  worker.postMessage({ viewProj: lastSortedView });
+}
+
+// ---- file loading ----------------------------------------------------------
+const SH_C0 = 0.28209479177387814;
+const PLY_SIZES = { double: 8, float: 4, int: 4, uint: 4, short: 2, ushort: 2, uchar: 1, char: 1 };
+
+function plyToSplat(buffer) {
+  const headerEnd = "end_header\n";
+  const head = new TextDecoder().decode(new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 65536)));
+  const idx = head.indexOf(headerEnd);
+  if (idx < 0) throw new Error("Invalid .ply: no end_header");
+  const header = head.slice(0, idx);
+  if (!/format binary_little_endian/.test(header)) throw new Error("Only binary_little_endian .ply is supported");
+  const count = parseInt(/element vertex (\d+)/.exec(header)[1]);
+  const props = [];
+  let offset = 0;
+  for (const line of header.split("\n")) {
+    const m = /^property (\w+) (\w+)/.exec(line.trim());
+    if (!m) continue;
+    props.push({ name: m[2], type: m[1], offset });
+    offset += PLY_SIZES[m[1]] || 4;
+  }
+  const stride = offset;
+  const at = Object.fromEntries(props.map((p) => [p.name, p]));
+  const need = ["x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3", "opacity"];
+  for (const n of need) if (!at[n]) throw new Error(`.ply is missing property '${n}' — not a 3D Gaussian splatting file?`);
+
+  const dv = new DataView(buffer, idx + headerEnd.length);
+  const read = (p, i) => p.type === "float" ? dv.getFloat32(i * stride + p.offset, true)
+                       : p.type === "double" ? dv.getFloat64(i * stride + p.offset, true)
+                       : dv.getUint8(i * stride + p.offset);
+  const out = new ArrayBuffer(count * 32);
+  const f = new Float32Array(out), b = new Uint8Array(out);
+  const clamp255 = (v) => Math.max(0, Math.min(255, Math.round(v)));
+  for (let i = 0; i < count; i++) {
+    f[8 * i + 0] = read(at.x, i);
+    f[8 * i + 1] = read(at.y, i);
+    f[8 * i + 2] = read(at.z, i);
+    f[8 * i + 3] = Math.exp(read(at.scale_0, i));
+    f[8 * i + 4] = Math.exp(read(at.scale_1, i));
+    f[8 * i + 5] = Math.exp(read(at.scale_2, i));
+    if (at.f_dc_0) {
+      b[32 * i + 24] = clamp255((0.5 + SH_C0 * read(at.f_dc_0, i)) * 255);
+      b[32 * i + 25] = clamp255((0.5 + SH_C0 * read(at.f_dc_1, i)) * 255);
+      b[32 * i + 26] = clamp255((0.5 + SH_C0 * read(at.f_dc_2, i)) * 255);
+    } else {
+      b[32 * i + 24] = at.red ? read(at.red, i) : 255;
+      b[32 * i + 25] = at.green ? read(at.green, i) : 255;
+      b[32 * i + 26] = at.blue ? read(at.blue, i) : 255;
+    }
+    b[32 * i + 27] = clamp255(255 / (1 + Math.exp(-read(at.opacity, i))));
+    const q = [read(at.rot_0, i), read(at.rot_1, i), read(at.rot_2, i), read(at.rot_3, i)];
+    const n = Math.hypot(...q) || 1;
+    for (let k = 0; k < 4; k++) b[32 * i + 28 + k] = clamp255(q[k] / n * 128 + 128);
+  }
+  return out;
+}
+
+function loadBuffer(buffer, name) {
+  try {
+    const magic = new TextDecoder().decode(new Uint8Array(buffer, 0, 4));
+    if (magic.startsWith("ply")) buffer = plyToSplat(buffer);
+    else if (buffer.byteLength % 32 !== 0) throw new Error("Not a .splat file (size not a multiple of 32 bytes)");
+    splatCount = buffer.byteLength / 32;
+    drawCount = 0;
+    worker.postMessage({ buffer, count: splatCount, viewProj: mul4(proj, viewMatrix()) }, [buffer]);
+    dropEl.classList.add("hidden");
+    statusEl.textContent = `${name} — ${splatCount.toLocaleString()} splats`;
+  } catch (err) {
+    errEl.textContent = String(err.message || err);
+    dropEl.classList.remove("hidden");
+  }
+}
+
+document.getElementById("file").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (file) file.arrayBuffer().then((buf) => loadBuffer(buf, file.name));
+});
+addEventListener("dragover", (e) => e.preventDefault());
+addEventListener("drop", (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (file) file.arrayBuffer().then((buf) => loadBuffer(buf, file.name));
+});
+
+const urlParam = new URLSearchParams(location.search).get("url");
+if (urlParam) {
+  statusEl.textContent = `loading ${urlParam}…`;
+  fetch(urlParam)
+    .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status} for ${urlParam}`); return r.arrayBuffer(); })
+    .then((buf) => loadBuffer(buf, urlParam.split("/").pop()))
+    .catch((err) => { errEl.textContent = String(err.message || err); });
+}
+
+// ---- input -----------------------------------------------------------------
+const keys = new Set();
+addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  keys.add(e.code);
+  if (e.code === "KeyR") Object.assign(cam, HOME);
+  if (["Space", "ControlLeft", "ControlRight"].includes(e.code)) e.preventDefault();
+});
+addEventListener("keyup", (e) => keys.delete(e.code));
+addEventListener("blur", () => keys.clear());
+
+canvas.addEventListener("click", () => {
+  if (document.pointerLockElement !== canvas && canvas.requestPointerLock) canvas.requestPointerLock();
+});
+addEventListener("mousemove", (e) => {
+  if (document.pointerLockElement !== canvas) return;
+  const sens = 0.0022;
+  cam.yaw += e.movementX * sens;
+  cam.pitch -= e.movementY * sens;               // mouse up = look up
+  const lim = Math.PI / 2 - 0.01;
+  cam.pitch = Math.max(-lim, Math.min(lim, cam.pitch));
+});
+addEventListener("wheel", (e) => {
+  cam.speed = Math.max(0.05, Math.min(50, cam.speed * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+}, { passive: true });
+
+function stepCamera(dt) {
+  const s = cam.speed * (keys.has("ShiftLeft") || keys.has("ShiftRight") ? 4 : 1) * dt;
+  const sy = Math.sin(cam.yaw), cy = Math.cos(cam.yaw);
+  let dx = 0, dy = 0, dz = 0;
+  if (keys.has("KeyW")) { dx += sy; dz += cy; }
+  if (keys.has("KeyS")) { dx -= sy; dz -= cy; }
+  if (keys.has("KeyD")) { dx += cy; dz -= sy; }
+  if (keys.has("KeyA")) { dx -= cy; dz += sy; }
+  if (keys.has("Space") || keys.has("KeyE")) dy -= 1;   // world up is -y
+  if (keys.has("ControlLeft") || keys.has("ControlRight") || keys.has("KeyC") || keys.has("KeyQ")) dy += 1;
+  cam.x += dx * s; cam.y += dy * s; cam.z += dz * s;
+}
+
+// ---- render loop -------------------------------------------------------------
+let lastTime = performance.now(), frames = 0, fpsTime = 0, fps = 0;
+function frame(now) {
+  const dt = Math.min((now - lastTime) / 1000, 0.1);
+  lastTime = now;
+  stepCamera(dt);
+
+  const view = viewMatrix();
+  const viewProj = mul4(proj, view);
+  if (splatCount) {
+    let moved = !lastSortedView;
+    if (lastSortedView)
+      for (let i = 0; i < 16 && !moved; i++)
+        if (Math.abs(viewProj[i] - lastSortedView[i]) > 1e-4) moved = true;
+    if (moved) requestSort();
+  }
+
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  if (drawCount) {
+    gl.uniformMatrix4fv(uProj, false, proj);
+    gl.uniformMatrix4fv(uView, false, view);
+    gl.uniform2f(uFocal, focal[0], focal[1]);
+    gl.uniform2f(uViewport, canvas.width, canvas.height);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, drawCount);
+  }
+
+  frames++; fpsTime += dt;
+  if (fpsTime > 0.5) {
+    fps = Math.round(frames / fpsTime);
+    frames = 0; fpsTime = 0;
+    if (splatCount) {
+      statusEl.textContent =
+        `${splatCount.toLocaleString()} splats · ${fps} fps · speed ${cam.speed.toFixed(1)}`;
+    }
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---- debug/test hooks ----------------------------------------------------------
+window.__viewer = {
+  cam,
+  get splatCount() { return splatCount; },
+  get drawCount() { return drawCount; },
+  setCamera(x, y, z, yaw = 0, pitch = 0) { Object.assign(cam, { x, y, z, yaw, pitch }); },
+  samplePixel(x, y) {  // CSS-ish coords, origin top-left of canvas
+    const px = new Uint8Array(4);
+    gl.readPixels(Math.round(x), canvas.height - 1 - Math.round(y), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    return Array.from(px);
+  },
+  loadBuffer,
+};
+</script>
+</body>
+</html>
