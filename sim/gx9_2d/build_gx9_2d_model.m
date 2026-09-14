@@ -345,11 +345,16 @@ end
 function local_newsub(blkPath, pos)
 %LOCAL_NEWSUB  Create an empty subsystem, whatever the release's default is.
     add_block('built-in/Subsystem', blkPath, 'Position', pos);
-    inner = find_system(blkPath,'SearchDepth',1,'LookUnderMasks','all','FollowLinks','on','Type','Block');
-    for k = 1:numel(inner)
-        if ~strcmp(inner{k}, blkPath)
-            try, delete_block(inner{k}); catch, end %#ok<CTCH>
+    try
+        inner = find_system(blkPath,'SearchDepth',1,'LookUnderMasks','all', ...
+                            'FollowLinks','on');
+        for k = 1:numel(inner)
+            if ~strcmp(inner{k}, blkPath)
+                delete_block(inner{k});
+            end
         end
+    catch
+        % Nothing to clear - built-in/Subsystem comes up empty anyway.
     end
 end
 
@@ -378,7 +383,8 @@ function chart = local_findchart(blkPath)
 %LOCAL_FINDCHART  Stateflow chart object behind a MATLAB Function block.
 %   Stateflow reports Path as the PARENT system, so the full block path has
 %   to be reassembled rather than matched against Path directly.
-    charts = sfroot.find('-isa','Stateflow.EMChart');
+    S      = sfroot;
+    charts = S.find('-isa','Stateflow.EMChart');
     for k = 1:numel(charts)
         if strcmp([charts(k).Path '/' charts(k).Name], blkPath)
             chart = charts(k);

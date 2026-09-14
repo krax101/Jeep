@@ -48,9 +48,18 @@ so it reviews, diffs and merges like the rest of this repo.
 
 ```matlab
 cd sim/gx9_2d
+gx9_setup                   % check environment -> build -> self-test -> run
+```
+
+`gx9_setup` is the one-command path: it verifies MATLAB and Simulink are
+present and licensed, builds `GX9_2D.slx`, checks it against the reference
+solver, then runs the scenarios. The individual steps if you want them
+separately:
+
+```matlab
 build_gx9_2d_model          % writes and opens GX9_2D.slx
-run_gx9_2d                  % acceleration + top speed + gradeability + plots
 gx9_selftest                % check the model against the reference solver
+run_gx9_2d                  % acceleration + top speed + gradeability + plots
 ```
 
 Other entry points:
